@@ -149,6 +149,11 @@ class GATA(nn.Module):
     def __init__(self, in_dim, out_dim, hidden_dim, patch_count,global_act,num_heads=1,):
         super(GATA, self).__init__()
         self.global_act = global_act
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+        self.hidden_dim = hidden_dim
+        self.num_heads = num_heads
         if global_act is True:
             self.cross_attender = MMAttentionLayer(
                 dim=in_dim*(patch_count+1),
@@ -166,6 +171,9 @@ class GATA(nn.Module):
                 nn.Linear(int(in_dim*(patch_count+1)/4), out_dim)
             )
         else:
+            edges = [(i, j) for i in range(patch_count+1) for j in range(patch_count+1) if i != j]
+            g = dgl.graph(edges, num_nodes=patch_count+1)
+            g = g.to(self.device)
             self.layer1 = MultiHeadGATLayer(g, self.in_dim, self.hidden_dim, self.num_heads).to(self.device)
         # 这里需要注意的是，因为第一层多头注意力机制层layer1选择的是拼接
         # 那么传入第二层的参数应该是第一层的 输出维度 * 头数
@@ -175,15 +183,9 @@ class GATA(nn.Module):
                 nn.ReLU(),
                 nn.Linear(int(in_dim/4), out_dim)
             ).to(self.device)
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.hidden_dim = hidden_dim
-        self.num_heads = num_heads
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
 
-        edges = [(i, j) for i in range(patch_count+1) for j in range(patch_count+1) if i != j]
-        g = dgl.graph(edges, num_nodes=patch_count+1)
-        g = g.to(self.device)
+        
 
     def forward(self,pi_total_vector):
  
@@ -293,10 +295,12 @@ class GATA(nn.Module):
 
 
 class PromptEncodeFactory(nn.Module):
-  def __init__(self,in_dim,encoder_model="dmis-lab/biobert-base-cased-v1.2",learnable_n=10,patch_count = 4,):
+  def __init__(self,in_dim,encoder_model="dmis-lab/biobert-base-cased-v1.2",learnable_n=40,patch_count = 4,):
     super().__init__()
     
     self.model = AutoModel.from_pretrained(encoder_model)
+    for param in self.model.encoder.parameters():
+        param.requires_grad = False  # 冻结 encoder 的参数
     self.tokenizer = AutoTokenizer.from_pretrained(encoder_model)
     self.embeddings = self.model.embeddings
     for param in self.model.parameters():
@@ -328,14 +332,14 @@ class PromptEncodeFactory(nn.Module):
     outputs = []  # 初始化一个空列表以存储所有的 output
 
     for index, text in enumerate(texts):
+        learnable_prompt_count = min(embeds[index].shape[0]//10, self.learnable_n)  # 计算要使用的 learnable prompts 数量
         learnable_prompt = self.learnable_prompts[index].to(device)
         text_with_learnable_prompt_vector = torch.cat([learnable_prompt, embeds[index].unsqueeze(0)], dim=1)
         # text_with_learnable_prompt_vector = torch.cat([embeds[index].unsqueeze(0)], dim=1)
         # 构造 attention_mask
         attention_mask = torch.ones(text_with_learnable_prompt_vector.size()[:-1]).to(device)
+        attention_mask[learnable_prompt_count+1:] = 0  # 将未使用的 learnable prompts 的部分设为 0
         
-        for param in self.model.encoder.parameters():
-            param.requires_grad = False  # 冻结 encoder 的参数
         output = self.model.encoder(text_with_learnable_prompt_vector, attention_mask=attention_mask)
         output = output.last_hidden_state
         cls_embedding = output[:, 0, :]
@@ -443,7 +447,7 @@ class CPKSModel(nn.Module):
                  model_path='wisdomik/Quilt-Llava-v1.5-7b',
                  encoder_model_path="dmis-lab/biobert-v1.1",
                  patch_count=4,
-                 learnable_n=15,
+                 learnable_n=40,
                  in_dim = 768,
                  out_dim = 128,
                  hidden_dim = 1024,

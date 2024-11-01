@@ -109,7 +109,7 @@ class MLPOmicswithP(nn.Module):
         #---> project omics data to projection_dim/2
         data = self.net(data_omics).unsqueeze(0) #[B, n]
 
-        knowledge_df = pd.read_csv(f'/root/autodl-tmp/survival_bag/data/prior_knowledge/{self.study}/knowledge_p4.csv')
+        knowledge_df = pd.read_csv(f'/home/ubuntu/disk1/wys/SurvPath/datasets_csv/prior_knowledge/{self.study}/knowledge_p4.csv')
         
         #process plugin
         slide_id_jpg = kwargs['slide_id'].replace(".svs",".jpg")

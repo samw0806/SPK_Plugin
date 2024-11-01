@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug TCGA Model Training",
+            "type": "python",
+            "request": "launch",
+            "python": "/home/ubuntu/anaconda3/envs/qllava/bin/python",
+            "program": "${workspaceFolder}/main.py",  // 修改为主程序路径
+            "args": [
+                "--load_model",
+                "--checkpoint_path", "/home/ubuntu/disk1/wys/data/survival/data/results_ori/omics/results_stad_omics/tcga_stad__nll_surv_a0.5_lr5e-04_l2Weight_0.0001_5foldcv_b1_survival_months_dss_dim1_768_patches_4096_wsiDim_256_epochs_5_fusion_None_modality_omics_pathT_combine",
+                "--study", "tcga_stad",
+                "--task", "survival",
+                "--split_dir", "splits",
+                "--which_splits", "5foldcv",
+                "--type_of_path", "combine",
+                "--modality", "omics",
+                "--data_root_dir", "/home/ubuntu/disk1/wys/data/pathways/stad/tiles-l1-s224/feats-l1-s224-CTransPath-sampler/pt_files/",
+                "--label_file", "datasets_csv/metadata/tcga_stad.csv",
+                "--omics_dir", "datasets_csv/raw_rna_data/combine/stad",
+                "--fusion", "add",
+                "--results_dir", "results_cat_mlp_with_p/results_add",
+                "--batch_size", "1",
+                "--global_act",
+                "--lr", "0.0005",
+                "--opt", "radam",
+                "--reg", "0.0001",
+                "--alpha_surv", "0.5",
+                "--weighted_sample",
+                "--max_epochs", "20",
+                "--label_col", "survival_months_dss",
+                "--k", "5",
+                "--bag_loss", "nll_surv",
+                "--n_classes", "4",
+                "--num_patches", "4096",
+                "--wsi_projection_dim", "256"
+            ],
+            "console": "integratedTerminal",
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"  // 设置环境变量
+            }
+        }
+    ]
+}
