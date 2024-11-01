@@ -3,7 +3,6 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import numpy as np
-from x_transformers import Encoder
 from torch.nn import ReLU
 
 """

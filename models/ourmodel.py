@@ -17,7 +17,7 @@ from models.llava.model.builder import load_pretrained_model
 from models.llava.mm_utils import process_images, tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
 from PIL import Image
 from models.llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_STRAT_PROMPTS
-
+from models.layers.cross_attention import FeedForward, MMAttentionLayer
 
 # class fusion_fc(torch.nn.Module):
 #     def __init__(self):
@@ -146,30 +146,45 @@ class MultiHeadGATLayer(nn.Module):
 
 # 定义GAT模型
 class GATA(nn.Module):
-    def __init__(self, in_dim, out_dim, hidden_dim,  global_act,num_heads=1,):
+    def __init__(self, in_dim, out_dim, hidden_dim, patch_count,global_act,num_heads=1,):
         super(GATA, self).__init__()
         self.global_act = global_act
         if global_act is True:
-            count = 4
+            self.cross_attender = MMAttentionLayer(
+                dim=in_dim*(patch_count+1),
+                dim_head=in_dim*(patch_count+1) // 2,
+                heads=2,
+                residual=False,
+                dropout=0.1,
+                num_pathways = 1
+            )
+            self.feed_forward = FeedForward(in_dim*(patch_count+1), dropout=0.1)
+            self.layer_norm = nn.LayerNorm(in_dim*(patch_count+1))
+            self.fc = nn.Sequential(
+                nn.Linear(in_dim*(patch_count+1), int(in_dim*(patch_count+1)/4)),
+                nn.ReLU(),
+                nn.Linear(int(in_dim*(patch_count+1)/4), out_dim)
+            )
         else:
-            count = 5
+            self.layer1 = MultiHeadGATLayer(g, self.in_dim, self.hidden_dim, self.num_heads).to(self.device)
+        # 这里需要注意的是，因为第一层多头注意力机制层layer1选择的是拼接
+        # 那么传入第二层的参数应该是第一层的 输出维度 * 头数
+            self.layer2 = MultiHeadGATLayer(g, self.hidden_dim * self.num_heads, self.in_dim, 1).to(self.device)
+            self.fc = nn.Sequential(
+                nn.Linear(in_dim, int(in_dim/4)),
+                nn.ReLU(),
+                nn.Linear(int(in_dim/4), out_dim)
+            ).to(self.device)
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.fc = nn.Sequential(
-                nn.Linear(in_dim, int(in_dim/4)),
-                nn.ReLU(),
-                nn.Linear(int(in_dim/4), out_dim)
-            ).to(self.device)
-        edges = [(i, j) for i in range(count) for j in range(count) if i != j]
-        g = dgl.graph(edges, num_nodes=count)
+
+        edges = [(i, j) for i in range(patch_count+1) for j in range(patch_count+1) if i != j]
+        g = dgl.graph(edges, num_nodes=patch_count+1)
         g = g.to(self.device)
-        self.layer1 = MultiHeadGATLayer(g, self.in_dim, self.hidden_dim, self.num_heads).to(self.device)
-        # 这里需要注意的是，因为第一层多头注意力机制层layer1选择的是拼接
-        # 那么传入第二层的参数应该是第一层的 输出维度 * 头数
-        self.layer2 = MultiHeadGATLayer(g, self.hidden_dim * self.num_heads, self.in_dim, 1).to(self.device)
+
     def forward(self,pi_total_vector):
  
 
@@ -196,35 +211,45 @@ class GATA(nn.Module):
 
             pi_total_vector = self.fc(pi_total_vector)
             out = scatter_add(pi_total_vector, batch, dim=0, dim_size=size)
-            return out
+            
         
         else:
-            pi_global_vector = pi_total_vector[-1].unsqueeze(0)  # 取出最后一个 (1, 768) 向量
-            pi_remaining_vectors = pi_total_vector[:-1]  
-            batch = torch.zeros(len(pi_remaining_vectors),dtype=torch.long).to(self.device)
-            pi_total_vector = self.layer1(pi_remaining_vectors)
-            # ELU激活函数
-            pi_total_vector = F.elu(pi_total_vector)
-            pi_total_vector = self.layer2(pi_total_vector)
-            pi_total_vector = pi_total_vector.unsqueeze(-1) if pi_total_vector.dim() == 1 else pi_total_vector
-            #size是说明有几类节点
-            #此处是就一种，所以是一个全零的张量，代表了每个节点的类型，或是说明每个节点都属于同一张图
-            #batch = torch.zeros(len(x_img),dtype=torch.long)
+            pi_total_vector = pi_total_vector.view(1, -1).unsqueeze(0)
+            pi_total_vector = self.cross_attender(x=pi_total_vector)
+            pi_total_vector = self.feed_forward(pi_total_vector)
+            pi_total_vector = self.layer_norm(pi_total_vector)
+            pi_total_vector = self.fc(pi_total_vector)
+            #---> aggregate 
+            out = torch.mean(pi_total_vector, dim=1)
+        return out
+        
+        # else:
+        #     pi_global_vector = pi_total_vector[-1].unsqueeze(0)  # 取出最后一个 (1, 768) 向量
+        #     pi_remaining_vectors = pi_total_vector[:-1]  
+        #     batch = torch.zeros(len(pi_remaining_vectors),dtype=torch.long).to(self.device)
+        #     pi_total_vector = self.layer1(pi_remaining_vectors)
+        #     # ELU激活函数
+        #     pi_total_vector = F.elu(pi_total_vector)
+        #     pi_total_vector = self.layer2(pi_total_vector)
+        #     pi_total_vector = pi_total_vector.unsqueeze(-1) if pi_total_vector.dim() == 1 else pi_total_vector
+        #     #size是说明有几类节点
+        #     #此处是就一种，所以是一个全零的张量，代表了每个节点的类型，或是说明每个节点都属于同一张图
+        #     #batch = torch.zeros(len(x_img),dtype=torch.long)
 
-            size = batch[-1].item() + 1
+        #     size = batch[-1].item() + 1
             
-            # assert gate.dim() == x.dim() and gate.size(0) == x.size(0)
-            #[1,2,1]做这个图专门的softmax，如果第二个参数是[0,1,0]，就会变成[0.5,2,0.5]
-            pi_total_vector = softmax(pi_total_vector, batch, num_nodes=size)
-            #将每个target node的与其邻接节点的边的权重之求和，最终得到的输出维度是节点数目
-            #scatter_add([1,1,2],[2,0,0])=[3,0,1] --- 第二个向量代表第一个向量里面每个数字需要加到哪个位置上面
-            #out是所有节点的总特征
-            #聚合版本(输出(1,out_dim))
+        #     # assert gate.dim() == x.dim() and gate.size(0) == x.size(0)
+        #     #[1,2,1]做这个图专门的softmax，如果第二个参数是[0,1,0]，就会变成[0.5,2,0.5]
+        #     pi_total_vector = softmax(pi_total_vector, batch, num_nodes=size)
+        #     #将每个target node的与其邻接节点的边的权重之求和，最终得到的输出维度是节点数目
+        #     #scatter_add([1,1,2],[2,0,0])=[3,0,1] --- 第二个向量代表第一个向量里面每个数字需要加到哪个位置上面
+        #     #out是所有节点的总特征
+        #     #聚合版本(输出(1,out_dim))
 
-            pi_total_vector = self.fc(pi_total_vector+pi_global_vector)
-            out = scatter_add(pi_total_vector, batch, dim=0, dim_size=size)
+        #     pi_total_vector = self.fc(pi_total_vector+pi_global_vector)
+        #     out = scatter_add(pi_total_vector, batch, dim=0, dim_size=size)
 
-            return out
+        #     return out
 
     
     #聚合版本
@@ -433,7 +458,7 @@ class CPKSModel(nn.Module):
             param.requires_grad = False
         self.promptLearner = PromptEncodeFactory(encoder_model=encoder_model_path,learnable_n=learnable_n,in_dim = in_dim,patch_count=patch_count)
         # self.align = AlignBlock()
-        self.align = GATA(in_dim,out_dim,hidden_dim,  global_act,num_heads=1,)
+        self.align = GATA(in_dim,out_dim,hidden_dim, patch_count, global_act,num_heads=1,)
     def crop_image_patches(self,folder_name,slide_id, num_patches):
         # 检查 num_patches 是否为正偶数
         if not isinstance(num_patches, int) or num_patches <= 0 or num_patches % 2 != 0:

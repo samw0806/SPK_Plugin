@@ -128,7 +128,7 @@ def _get_custom_exp_code(args):
     param_code += '_%s' % args.which_splits.split("_")[0]
 
     #----> Batch Size
-    param_code += '_b%s' % str(args.batch_sizes)
+    param_code += '_b%s' % str(args.batch_size)
 
     # label col 
     param_code += "_" + args.label_col

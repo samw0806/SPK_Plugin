@@ -1,14 +1,12 @@
 
 import torch
 import numpy as np 
-from x_transformers import CrossAttender
 
 import torch
 import torch.nn as nn
 from torch import nn
 from einops import reduce
 
-from x_transformers import Encoder
 from torch.nn import ReLU
 
 from models.layers.cross_attention import FeedForward, MMAttentionLayer

@@ -496,7 +496,7 @@ def l1_reg_modules(model):
     return l1_reg
 
 
-def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, loss_fn,bs,lambda_reg=1e-5):
+def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, loss_fn):
     r"""
     Perform one epoch of training 
 
@@ -536,14 +536,12 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
         risk, _ = _calculate_risk(h)
 
         all_risk_scores, all_censorships, all_event_times, all_clinical_data = _update_arrays(all_risk_scores, all_censorships, all_event_times,all_clinical_data, event_time, censor, risk, clinical_data_list)
-        loss_reg = l1_reg_modules(model) * lambda_reg
         total_loss += loss_value 
-        loss = loss / bs + loss_reg
         loss.backward()
-        if (batch_idx + 1) % bs == 0:
-            optimizer.step()
-            scheduler.step()
-            optimizer.zero_grad()
+
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
             
         if (batch_idx % 20) == 0:
             print("batch: {}, loss: {:.3f}".format(batch_idx, loss.item()))
@@ -794,7 +792,7 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
     all_survival = _extract_survival_metadata(train_loader, val_loader)
     
     for epoch in range(args.max_epochs):
-        _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn,args.batch_sizes)
+        _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn)
         # _, val_cindex, _, _, _, _, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
         # print('Val loss:', total_loss, ', val_c_index:', val_cindex)
     # save the trained model
