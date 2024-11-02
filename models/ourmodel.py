@@ -168,7 +168,13 @@ class GATA(nn.Module):
             self.fc = nn.Sequential(
                 nn.Linear(in_dim*(patch_count+1), int(in_dim*(patch_count+1)/4)),
                 nn.ReLU(),
-                nn.Linear(int(in_dim*(patch_count+1)/4), out_dim)
+                nn.Dropout(0.1),
+                nn.Linear(int(in_dim*(patch_count+1)/4), int(in_dim*(patch_count+1)/4)),
+                nn.ReLU(),
+                nn.Dropout(0.1),
+                nn.Linear(int(in_dim*(patch_count+1)/4), out_dim),
+                nn.ReLU(),
+                nn.Dropout(0.1),
             )
         else:
             edges = [(i, j) for i in range(patch_count+1) for j in range(patch_count+1) if i != j]
