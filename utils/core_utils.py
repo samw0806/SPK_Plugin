@@ -526,22 +526,21 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
     # one epoch
     for batch_idx, data in tqdm(enumerate(loader), desc="Epoch", total=len(loader), unit="batch"):
         
-
+        optimizer.zero_grad()
         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, modality, device, data)
         
         loss = loss_fn(h=h, y=y_disc, t=event_time, c=censor) 
         loss_value = loss.item()
         loss = loss / y_disc.shape[0]
-        
         risk, _ = _calculate_risk(h)
-
         all_risk_scores, all_censorships, all_event_times, all_clinical_data = _update_arrays(all_risk_scores, all_censorships, all_event_times,all_clinical_data, event_time, censor, risk, clinical_data_list)
+        
         total_loss += loss_value 
+        
         loss.backward()
-
         optimizer.step()
         scheduler.step()
-        optimizer.zero_grad()
+        
             
         if (batch_idx % 20) == 0:
             print("batch: {}, loss: {:.3f}".format(batch_idx, loss.item()))
@@ -590,6 +589,8 @@ def _calculate_metrics(loader, dataset_factory, survival_train, all_risk_scores,
     #<---
 
     c_index = concordance_index_censored((1-all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
+    if c_index == 0.5:
+        ipdb.set_trace()
     c_index_ipcw, BS, IBS, iauc = 0., 0., 0., 0.
 
     # change the datatype of survival test to calculate metrics 

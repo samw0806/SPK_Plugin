@@ -69,6 +69,37 @@ from models.layers.cross_attention import FeedForward, MMAttentionLayer
 #             LayerNorm(dim2),
 #             nn.Dropout(p=dropout))
 
+class CrossAttention(nn.Module):
+    def __init__(self, in_dim1, in_dim2, k_dim, v_dim, num_heads):
+        super(CrossAttention, self).__init__()
+        self.num_heads = num_heads
+        self.k_dim = k_dim
+        self.v_dim = v_dim
+        
+        self.proj_q1 = nn.Linear(in_dim1, k_dim * num_heads, bias=False)
+        self.proj_k2 = nn.Linear(in_dim2, k_dim * num_heads, bias=False)
+        self.proj_v2 = nn.Linear(in_dim2, v_dim * num_heads, bias=False)
+        self.proj_o = nn.Linear(v_dim * num_heads, in_dim1)
+        
+    def forward(self, x1, x2, mask=None):
+        batch_size, seq_len1, in_dim1 = x1.size()
+        seq_len2 = x2.size(1)
+        
+        q1 = self.proj_q1(x1).view(batch_size, seq_len1, self.num_heads, self.k_dim).permute(0, 2, 1, 3)
+        k2 = self.proj_k2(x2).view(batch_size, seq_len2, self.num_heads, self.k_dim).permute(0, 2, 3, 1)
+        v2 = self.proj_v2(x2).view(batch_size, seq_len2, self.num_heads, self.v_dim).permute(0, 2, 1, 3)
+        
+        attn = torch.matmul(q1, k2) / self.k_dim**0.5
+        
+        if mask is not None:
+            attn = attn.masked_fill(mask == 0, -1e9)
+        
+        attn = F.softmax(attn, dim=-1)
+        output = torch.matmul(attn, v2).permute(0, 2, 1, 3).contiguous().view(batch_size, seq_len1, -1)
+        output = self.proj_o(output)
+        
+        return output
+
 
 # 定义GAT神经层
 class GATLayer(nn.Module):
@@ -143,6 +174,9 @@ class MultiHeadGATLayer(nn.Module):
         else:
             # 所有的hi对应元素求平均
             return torch.mean(torch.stack(head_outs))
+        
+
+
 
 # 定义GAT模型
 class GATA(nn.Module):
@@ -155,27 +189,28 @@ class GATA(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         if global_act is True:
-            self.cross_attender = MMAttentionLayer(
-                dim=in_dim*(patch_count+1),
-                dim_head=in_dim*(patch_count+1) // 2,
-                heads=2,
-                residual=False,
-                dropout=0.1,
-                num_pathways = 1
-            )
-            self.feed_forward = FeedForward(in_dim*(patch_count+1), dropout=0.1)
-            self.layer_norm = nn.LayerNorm(in_dim*(patch_count+1))
+            # self.cross_attender = MMAttentionLayer(
+            #     dim=in_dim*(patch_count+1),
+            #     dim_head=in_dim*(patch_count+1) // 2,
+            #     heads=2,
+            #     residual=False,
+            #     dropout=0.1,
+            #     num_pathways = 1
+            # )
+            self.cross_attender = CrossAttention(in_dim1=in_dim, in_dim2=in_dim*patch_count, k_dim=64, v_dim=64, num_heads=8)
+            self.feed_forward = FeedForward(in_dim, dropout=0.1)
+            self.layer_norm = nn.LayerNorm(in_dim)
             self.fc = nn.Sequential(
-                nn.Linear(in_dim*(patch_count+1), int(in_dim*(patch_count+1)/4)),
+                nn.Linear(in_dim, int(in_dim/4)),
                 nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(int(in_dim*(patch_count+1)/4), int(in_dim*(patch_count+1)/4)),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(int(in_dim*(patch_count+1)/4), out_dim),
-                nn.ReLU(),
-                nn.Dropout(0.1),
+                nn.Linear(int(in_dim/4), out_dim)
             )
+            # self.fc = nn.Sequential(
+            #     nn.Linear(in_dim*(patch_count+1), int(in_dim*(patch_count+1)/4)),
+            #     nn.Linear(int(in_dim*(patch_count+1)/4), int(in_dim*(patch_count+1)/4)),
+            #     nn.ReLU(),
+            #     nn.Linear(int(in_dim*(patch_count+1)/4), out_dim),
+            # )
         else:
             edges = [(i, j) for i in range(patch_count+1) for j in range(patch_count+1) if i != j]
             g = dgl.graph(edges, num_nodes=patch_count+1)
@@ -222,13 +257,14 @@ class GATA(nn.Module):
             
         
         else:
-            pi_total_vector = pi_total_vector.view(1, -1).unsqueeze(0)
-            pi_total_vector = self.cross_attender(x=pi_total_vector)
+            pi_global_vector = pi_total_vector[-1].unsqueeze(0)  # 取出最后一个 (1, 768) 向量
+            pi_remaining_vectors = pi_total_vector[:-1]  
+            pi_remaining_vectors = pi_remaining_vectors.view(1, -1).unsqueeze(0)
+            pi_total_vector = self.cross_attender(pi_global_vector.unsqueeze(0) ,pi_remaining_vectors)
             pi_total_vector = self.feed_forward(pi_total_vector)
             pi_total_vector = self.layer_norm(pi_total_vector)
-            pi_total_vector = self.fc(pi_total_vector)
+            out = self.fc(pi_total_vector).squeeze(0)
             #---> aggregate 
-            out = torch.mean(pi_total_vector, dim=1)
         return out
         
         # else:
@@ -338,7 +374,7 @@ class PromptEncodeFactory(nn.Module):
     outputs = []  # 初始化一个空列表以存储所有的 output
 
     for index, text in enumerate(texts):
-        learnable_prompt_count = min(embeds[index].shape[0]//10, self.learnable_n)  # 计算要使用的 learnable prompts 数量
+        learnable_prompt_count = min((embeds[index].shape[0] // 10), self.learnable_n)  # 计算要使用的 learnable prompts 数量
         learnable_prompt = self.learnable_prompts[index].to(device)
         text_with_learnable_prompt_vector = torch.cat([learnable_prompt, embeds[index].unsqueeze(0)], dim=1)
         # text_with_learnable_prompt_vector = torch.cat([embeds[index].unsqueeze(0)], dim=1)

@@ -4,6 +4,7 @@ import torch
 from models.ourmodel import CPKSModel
 from models.model_utils import BilinearFusion
 import pandas as pd
+import ipdb
 """
 
 Implement a MLP to handle tabular omics data 
@@ -97,7 +98,6 @@ class MLPOmicswithP(nn.Module):
         
         self.cpks_plugin = CPKSModel(out_dim=projection_dim//2,global_act = global_act)
         self.linear = nn.Sequential(*[nn.Linear(projection_dim, projection_dim*4), nn.ReLU(), nn.Linear(projection_dim*4, projection_dim//2), nn.ReLU()])
-        self.bilinear = BilinearFusion(dim1=256, dim2=256, scale_dim1=8, scale_dim2=8, mmhid=256)
 
 
     def forward(self, **kwargs):
@@ -109,7 +109,7 @@ class MLPOmicswithP(nn.Module):
         #---> project omics data to projection_dim/2
         data = self.net(data_omics).unsqueeze(0) #[B, n]
 
-        knowledge_df = pd.read_csv(f'/home/ubuntu/disk1/wys/SurvPath/datasets_csv/prior_knowledge/{self.study}/knowledge_p4.csv')
+        knowledge_df = pd.read_csv(f'/home/ubuntu/disk1/wys/SPK_Plugin/datasets_csv/prior_knowledge/{self.study}/knowledge_p4.csv')
         
         #process plugin
         slide_id_jpg = kwargs['slide_id'].replace(".svs",".jpg")
@@ -124,7 +124,7 @@ class MLPOmicswithP(nn.Module):
         if self.fusion == "add":
             # 方式1: 元素级相加
             result = knowledge_emb + data
-            
+
         elif self.fusion == "multiply":
             # 方式2: 元素级相乘
             result = knowledge_emb * data
@@ -137,9 +137,10 @@ class MLPOmicswithP(nn.Module):
             
         else:
             raise ValueError("Unsupported fusion method. Choose from 'add', 'multiply', or 'concat_linear'.")
-
         #---->predict
         logits = self.to_logits(result) #[B, n_classes]
+        if logits.max() > 50 or logits.min() < -50:
+            ipdb.set_trace()
         return logits
     
 

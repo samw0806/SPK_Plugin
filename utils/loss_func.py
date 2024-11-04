@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from itertools import combinations
-import pdb
+import ipdb
 
 
 class NLLSurvLoss(nn.Module):
@@ -69,7 +69,6 @@ def nll_loss(h, y, c, alpha=0.0, eps=1e-7, reduction='sum'):
     # make sure these are ints
     y = y.type(torch.int64)
     c = c.type(torch.int64)
-
     hazards = torch.sigmoid(h)
     # print("hazards shape", hazards.shape)
 
@@ -112,5 +111,6 @@ def nll_loss(h, y, c, alpha=0.0, eps=1e-7, reduction='sum'):
         loss = loss.sum()
     else:
         raise ValueError("Bad input for reduction: {}".format(reduction))
-
+    if loss.item() == 0:
+        ipdb.set_trace()
     return loss
