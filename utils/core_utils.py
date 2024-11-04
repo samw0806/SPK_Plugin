@@ -111,7 +111,7 @@ def _init_optim(args, model):
 
     return optimizer
 
-def _init_model(args):
+def _init_model(args,cur):
     
     print('\nInit Model...', end=' ')
 
@@ -238,9 +238,17 @@ def _init_model(args):
 
     print('Done!')
     _print_network(args.results_dir, model)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if args.load_model:
+        checkpoint_path = os.path.join(args.checkpoint_path, f"s_{cur}_checkpoint.pt")
+        state_dict = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(state_dict,strict=False)
+
+        # 将模型转换到 GPU（如果可用）
+    model = model.to(device)
     for name, param in model.named_parameters():
         if param.requires_grad:
-            print(f"Layer: {name}")
+            print(f"Requires_grad_Layer: {name}")
 
     return model
 
@@ -837,16 +845,8 @@ def _train_val(datasets, cur, args):
     loss_fn = _init_loss_function(args)
 
     #----> init model
-    model = _init_model(args)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if args.load_model:
-        checkpoint_path = os.path.join(args.checkpoint_path, f"s_{cur}_checkpoint.pt")
-        # 加载模型权重，确保权重加载到合适的设备上
-        # state_dict = torch.load(checkpoint_path, map_location=device)
-        # model.load_state_dict(state_dict,strict=False)
+    model = _init_model(args,cur)
 
-        # 将模型转换到 GPU（如果可用）
-    model = model.to(device)
     #---> init optimizer
     optimizer = _init_optim(args, model)
 
