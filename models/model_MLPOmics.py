@@ -28,7 +28,7 @@ class MLPOmics(nn.Module):
             nn.Linear(input_dim, projection_dim//2), ReLU(), nn.Dropout(dropout),
             nn.Linear(projection_dim//2, projection_dim//2), ReLU(), nn.Dropout(dropout)
         ) 
-        
+        self.out_dim_p = projection_dim//2
         self.to_logits = nn.Sequential(
                 nn.Linear(projection_dim//2, n_classes)
             )
@@ -45,6 +45,18 @@ class MLPOmics(nn.Module):
         #---->predict
         logits = self.to_logits(data) #[B, n_classes]
         return logits
+    
+    def forward_p(self, **kwargs):
+        self.cuda()
+
+        #---> unpack
+        data_omics = kwargs["data_omics"].float().cuda().squeeze()
+        
+        #---> project omics data to projection_dim/2
+        data = self.net(data_omics) #[B, n]
+
+
+        return data
     
     def captum(self, omics):
 
@@ -139,8 +151,6 @@ class MLPOmicswithP(nn.Module):
             raise ValueError("Unsupported fusion method. Choose from 'add', 'multiply', or 'concat_linear'.")
         #---->predict
         logits = self.to_logits(result) #[B, n_classes]
-        if logits.max() > 50 or logits.min() < -50:
-            ipdb.set_trace()
         return logits
     
 

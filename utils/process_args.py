@@ -57,13 +57,21 @@ def _process_args():
     parser.add_argument('--warmup_epochs', type=int, default=1)
 
     #---> model related
-    parser.add_argument('--global_act', action='store_true', default=False, help='Use global special model.')
     parser.add_argument('--fusion', type=str, default=None)
     parser.add_argument('--modality', type=str, default="wsi")
     parser.add_argument('--encoding_dim', type=int, default=768, help='WSI encoding dim')
-    parser.add_argument('--use_nystrom', action='store_true', default=False, help='Use Nystrom attentin in SurvPath.')
+
+    #---> model with plugin
     parser.add_argument('--load_model', action='store_true', default=False, help='Use to load pretrain model.')
+    parser.add_argument('--model_p', type=str, default="wsi")
+    parser.add_argument('--fusion_p', type=str, default=None)
     parser.add_argument('--checkpoint_path', type=str, default=None, help='Path to the model checkpoint file.')
+    parser.add_argument('--global_act', action='store_true', default=False, help='Use global special model.')
+    parser.add_argument('--use_nystrom', action='store_true', default=False, help='Use Nystrom attentin in SurvPath.')
+    parser.add_argument('--pk_path', type=str, default=None)
+
+
+
     args = parser.parse_args()
 
     if not (args.task == "survival"):

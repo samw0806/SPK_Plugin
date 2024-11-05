@@ -59,7 +59,7 @@ class MLPWSI(nn.Module):
 
         self.feed_forward = FeedForward(self.wsi_projection_dim, dropout=dropout)
         self.layer_norm = nn.LayerNorm(self.wsi_projection_dim)
-
+        self.out_dim_p = self.wsi_projection_dim
         self.to_logits = nn.Sequential(
             nn.Linear(self.wsi_projection_dim, int(self.wsi_projection_dim/4)),
             nn.ReLU(),
@@ -100,3 +100,35 @@ class MLPWSI(nn.Module):
         logits = self.to_logits(embedding)
 
         return logits
+    
+    def forward_p(self, **kwargs):
+
+        omics = kwargs['data_omics']
+        wsi = kwargs['data_WSI']
+        mask = kwargs['mask']
+
+        #---> project wsi to smaller dimension (same as pathway dimension)
+        wsi_embed = self.wsi_projection_net(wsi)
+
+        #---> get pathway embeddings 
+        omics_embed = self.omic_projection_net(omics).unsqueeze(1)
+
+        #---> find cross attention between wsi and omics 
+        if mask is not None:
+            mask = mask.bool()
+            add_omics_start = torch.zeros([omics_embed.shape[0], omics_embed.shape[1]]).to(self.device)  # add omics tokens to mask 
+            mask = torch.cat([add_omics_start, mask], dim=1).bool()
+            mask = ~mask
+    
+        tokens = torch.cat([omics_embed, wsi_embed], dim=1)
+        mm_embed = self.cross_attender(x=tokens, mask=mask if mask is not None else None)
+
+        #---> feedforward and layer norm 
+        mm_embed = self.feed_forward(mm_embed)
+        mm_embed = self.layer_norm(mm_embed)
+
+        #---> aggregate 
+        embedding = torch.mean(mm_embed, dim=1)
+
+
+        return embedding

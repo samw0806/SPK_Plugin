@@ -50,7 +50,7 @@ class MaskedOmics(nn.Module):
         for (row, col) in zip(range(0, self.dim_per_path_1*self.num_pathways, self.dim_per_path_1), range(0, self.dim_per_path_2*self.num_pathways, self.dim_per_path_2)):
             self.mask_2[row:row+self.dim_per_path_1, col:col+self.dim_per_path_2] = 1
         self.mask_2 = torch.Tensor(self.mask_2)
-
+        self.out_dim_p = self.num_pathways*self.dim_per_path_2
         #---> to_logits 
         self.to_logits = nn.Sequential(
             nn.Linear(self.num_pathways*self.dim_per_path_2, self.num_pathways*self.dim_per_path_2//4), ReLU(), nn.Dropout(self.dropout),    
@@ -82,3 +82,15 @@ class MaskedOmics(nn.Module):
         #---> get logits
         logits = self.to_logits(out)
         return logits
+    
+    def forward_p(self, **kwargs):
+
+        x = kwargs['data_omics']
+
+        #---> apply mask to fc_1 and apply fc_1
+        out = torch.matmul(x, self.fc_1_weight * self.mask_1) + self.fc_1_bias
+
+        #---> apply mask to fc_2 and apply fc_2
+        out = torch.matmul(out, self.fc_2_weight * self.mask_2) + self.fc_2_bias
+
+        return out

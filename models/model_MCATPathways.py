@@ -72,7 +72,7 @@ class MCATPathways(nn.Module):
             self.mm = BilinearFusion(dim1=256, dim2=256, scale_dim1=8, scale_dim2=8, mmhid=256)
         else:
             self.mm = None
-        
+        self.out_dim_p = size[2]
         ### Classifier
         self.classifier = nn.Linear(size[2], n_classes)
 

@@ -85,7 +85,7 @@ class TMIL(nn.Module):
             self.fc_2_bias.to(self.device)
             self.mask_2 = self.mask_2.to(self.device)
             self.mm = self.mm.to(self.device)
-
+        self.out_dim_p = size[2]
         self.classifier = nn.Linear(size[2], n_classes)
         self.classifier = self.classifier.to(self.device)
         self.activation = nn.ReLU()
@@ -150,3 +150,34 @@ class TMIL(nn.Module):
         
         # return hazards, S, Y_hat, None, None
         return logits
+    
+    def forward_p(self, **kwargs):
+
+        # apply nystrom to wsi
+        x_path = kwargs['data_WSI']
+        x_path = self.fc(x_path)
+        h_path = self.nystrom(x_path)
+        h_path = h_path.squeeze().mean(dim=0)
+        
+        if self.fusion is not None:
+            
+            x_omic = kwargs['data_omics']
+            x_omic = x_omic.squeeze()
+
+            out = torch.matmul(x_omic, self.fc_1_weight * self.mask_1) + self.fc_1_bias
+            out = self.activation(out)
+            out = torch.matmul(out, self.fc_2_weight * self.mask_2) + self.fc_2_bias 
+
+            #---> apply linear transformation to upscale the dim_per_pathway (from 32 to 256) Lin, GELU, dropout, 
+            h_omic = self.upscale(out)
+
+            if self.fusion == 'bilinear':
+                h = self.mm(h_path.unsqueeze(dim=0), h_omic.unsqueeze(dim=0)).squeeze()
+            elif self.fusion == 'concat':
+                h = self.mm(torch.cat([h_path, h_omic], axis=0))
+        else:
+            h = h_path # [256] vector
+        
+        
+        # return hazards, S, Y_hat, None, None
+        return h

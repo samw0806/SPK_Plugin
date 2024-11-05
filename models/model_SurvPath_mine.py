@@ -49,102 +49,68 @@ class SurvPath_with_Plugin(nn.Module):
                 num_classes=4,
                 wsi_projection_dim=256,
                 omic_names = [],
-                study = 'stad'
+                study = 'stad',
+                model_p= None,
+                fusion= '',
+                pk_path= '',
+                global_act = True,      
                  ):
         super(SurvPath_with_Plugin, self).__init__()
         #下面这部分只影响到SurvPath原本的部分
         self.study = study
-        self.survpath = SurvPath(omic_sizes,
-            wsi_embedding_dim,
-            dropout,
-            num_classes,
-            wsi_projection_dim,
-            omic_names)
-        for param in self.survpath.parameters():
+        self.model_p = model_p
+        self.pk_path = pk_path
+        self.model_p = model_p
+        self.fusion = fusion
+        for param in self.model_p.parameters():
             param.requires_grad = False
-        self.cpks_plugin = CPKSModel(out_dim=256)
+        self.cpks_plugin = CPKSModel(out_dim=model_p.out_dim_p,global_act = global_act)
         self.num_pathways = len(omic_sizes)
-        self.cross_attender = MMAttentionLayer(
-            dim=wsi_projection_dim,
-            dim_head=wsi_projection_dim // 2,
-            heads=1,
-            residual=False,
-            dropout=0.1,
-            num_pathways = self.num_pathways
-        )
+
+        if fusion == "concat_linear":
+            self.linear = nn.Sequential(*[nn.Linear(model_p.out_dim_p*2, model_p.out_dim_p*4), nn.ReLU(), nn.Linear(model_p.out_dim_p*4, model_p.out_dim_p), nn.ReLU()])
+
         self.logits = nn.Sequential(
-                nn.Linear(128*3, int(128*3/4)),
+                nn.Linear(model_p.out_dim_p, int(model_p.out_dim_p/4)),
                 nn.ReLU(),
-                nn.Linear(int(128*3/4), num_classes)
+                nn.Linear(int(model_p.out_dim_p/4), num_classes)
             )
-        self.feed_forward = FeedForward(wsi_projection_dim // 2, dropout=dropout)
-        self.layer_norm = nn.LayerNorm(wsi_projection_dim // 2)
-        self.identity = nn.Identity() # use this layer to calculate ig
-    # def forward(self, **kwargs):
-    #     paths_postSA_embed,wsi_postSA_embed = self.survpath.forward_cut(**kwargs)
-    #     ipdb.set_trace()
-    #     knowledge_df = pd.read_csv(f'/home/ubuntu/disk1/wys/SurvPath/datasets_csv/prior_knowledge/{self.study}/knowledge_p4.csv')
-        
-    #     #process plugin
-    #     slide_id_jpg = kwargs['slide_id'].replace(".svs",".jpg")
-    #     matching_row = knowledge_df[knowledge_df['Label'] == slide_id_jpg]
-    #     ans_values = matching_row[['Ans_1', 'Ans_2', 'Ans_3', 'Ans_4', 'Ans_5']].values.flatten()
 
-    #     cpks_inputs = ans_values
-    #     knowledge_emb = self.cpks_plugin(cpks_inputs)
-    #     embedding = torch.cat([paths_postSA_embed, wsi_postSA_embed,knowledge_emb], dim=1) #---> both branches
-    #     # embedding = paths_postSA_embed #---> top bloc only
-    #     # embedding = wsi_postSA_embed #---> bottom bloc only
-
-    #     # embedding = torch.mean(mm_embed, dim=1)
-    #     #---> get logits
-    #     logits = self.logits(embedding)
-
-    #     return logits
     
     def forward(self, **kwargs):
-        knowledge_df = pd.read_csv(f'/home/ubuntu/disk1/wys/SurvPath/datasets_csv/prior_knowledge/{self.study}/knowledge_p4.csv')
+        #process plugin
+        self.cuda()
+
         
+        #---> project omics data to projection_dim/2
+        data = self.model_p.forward_p(**kwargs).unsqueeze(0) #[B, n]
+
+        knowledge_df = pd.read_csv(self.pk_path)
         #process plugin
         slide_id_jpg = kwargs['slide_id'].replace(".svs",".jpg")
         matching_row = knowledge_df[knowledge_df['Label'] == slide_id_jpg]
         ans_values = matching_row[['Ans_1', 'Ans_2', 'Ans_3', 'Ans_4', 'Ans_5']].values.flatten()
 
         cpks_inputs = ans_values
-        knowledge_emb = self.cpks_plugin(cpks_inputs).unsqueeze(0)
-        h_omic_bag,wsi_embed,return_attn = self.survpath.forward_mid_fusion(**kwargs)
-        tokens = torch.cat([h_omic_bag, wsi_embed,knowledge_emb], dim=1)
-        tokens = self.identity(tokens)
-        mask = None
-        if return_attn:
-            mm_embed, attn_pathways, cross_attn_pathways, cross_attn_histology = self.cross_attender(x=tokens, mask=mask if mask is not None else None, return_attention=True)
-        else:
-            mm_embed = self.cross_attender(x=tokens, mask=mask if mask is not None else None, return_attention=False)
+        knowledge_emb = self.cpks_plugin(cpks_inputs)
+        if self.fusion == "add":
+            # 方式1: 元素级相加
+            result = knowledge_emb + data
 
-        #---> feedforward and layer norm 
-        mm_embed = self.feed_forward(mm_embed)
-        mm_embed = self.layer_norm(mm_embed)
-        
-        #---> aggregate 
-        # modality specific mean 
-        paths_postSA_embed = mm_embed[:, :self.num_pathways, :]
-        paths_postSA_embed = torch.mean(paths_postSA_embed, dim=1)
-
-        wsi_postSA_embed = mm_embed[:, self.num_pathways:-5, :]  # 取路径后到最后五个特征之前
-        wsi_postSA_embed = torch.mean(wsi_postSA_embed, dim=1)
-
-        # 提取知识特征
-        knowledge_embed = mm_embed[:, -5:, :]  # 取最后五个知识特征
-        knowledge_embed = torch.mean(knowledge_embed, dim=1)
-
- 
-        embedding = torch.cat([paths_postSA_embed, wsi_postSA_embed,knowledge_embed], dim=1) #---> both branches
+        elif self.fusion == "multiply":
+            # 方式2: 元素级相乘
+            result = knowledge_emb * data
+            
+        elif self.fusion == "concat_linear":
+            # 方式3: 拼接后使用线性层
+            concat = torch.cat((knowledge_emb, data), dim=1)  # 维度 (1, 64)
+            result = self.linear(concat)  # 通过线性层映射回 (1, 32)
         # embedding = paths_postSA_embed #---> top bloc only
         # embedding = wsi_postSA_embed #---> bottom bloc only
 
         # embedding = torch.mean(mm_embed, dim=1)
         #---> get logits
-        logits = self.logits(embedding)
+        logits = self.logits(result)
 
         return logits
     

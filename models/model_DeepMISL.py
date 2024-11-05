@@ -37,9 +37,10 @@ class DeepMISL(nn.Module):
         self.fusion = fusion
         self.size_dict_path = {"small": [1024, 512, 256], "big": [1024, 512, 384]}
         self.size_dict_omic = {'small': [256, 256]}
-
+        
         ### Deep Sets Architecture Construction
         size = self.size_dict_path[size_arg]
+        self.out_dim_p = size[2]
         self.phi = nn.Sequential(*[nn.Linear(size[0], size[1]), nn.ReLU(), nn.Dropout(dropout)])
         self.rho = nn.Sequential(*[nn.Linear(size[1], size[2]), nn.ReLU(), nn.Dropout(dropout)])
 
@@ -149,7 +150,37 @@ class DeepMISL(nn.Module):
         
         # return hazards, S, Y_hat, None, None
         return logits
+    def forward_p(self, **kwargs):
+        x_path = kwargs['data_WSI']
+        x_path = x_path.squeeze()
 
+        h_path = self.phi(x_path).sum(axis=0)
+        h_path = self.rho(h_path)
+
+        if self.fusion is not None:
+            x_omic = kwargs['data_omics']
+            x_omic = x_omic.squeeze(0)
+
+            out = torch.matmul(x_omic, self.fc_1_weight * self.mask_1) + self.fc_1_bias
+            out = self.activation(out)
+            out = torch.matmul(out, self.fc_2_weight * self.mask_2) + self.fc_2_bias 
+
+            #---> apply linear transformation to upscale the dim_per_pathway (from 32 to 256) Lin, GELU, dropout, 
+            h_omic = self.upscale(out)
+            
+            if self.fusion == 'bilinear':
+                h = self.mm(h_path.unsqueeze(dim=0), h_omic.unsqueeze(dim=0)).squeeze()
+            elif self.fusion == 'concat':
+                h = self.mm(torch.cat([h_path, h_omic], axis=0))
+        else:
+            h = h_path # [256] vector
+
+        # Y_hat = torch.topk(logits, 1, dim = 1)[1]
+        # hazards = torch.sigmoid(logits)
+        # S = torch.cumprod(1 - hazards, dim=1)
+        
+        # return hazards, S, Y_hat, None, None
+        return h
 
 
 ################################

@@ -142,16 +142,10 @@ def _init_model(args,cur):
         model = MaskedOmics(**model_dict)
 
     elif args.modality == "omics":
-        if args.fusion is not None:
-            model_dict = {
-             "input_dim" : omics_input_dim, "projection_dim": 64, "dropout": args.encoder_dropout,'study': args.study,"fusion":args.fusion,"global_act":args.global_act
-            }
-            model = MLPOmicswithP(**model_dict)
-        else:
-            model_dict = {
+        model_dict = {
              "input_dim" : omics_input_dim, "projection_dim": 64, "dropout": args.encoder_dropout,
             }
-            model = MLPOmics(**model_dict)
+        model = MLPOmics(**model_dict)
 
     elif args.modality == "snn":
 
@@ -223,9 +217,24 @@ def _init_model(args,cur):
         else:
             model = SurvPath(**model_dict)
     
-    elif args.modality == "survpath_mine":
+    if args.load_model:
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        checkpoint_path = os.path.join(args.checkpoint_path, f"s_{cur}_checkpoint.pt")
+        state_dict = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(state_dict,strict=False)
 
-        model_dict = {'omic_sizes': args.omic_sizes, 'num_classes': args.n_classes, 'study': args.study}
+        # 将模型转换到 GPU（如果可用）
+        model_p = model.to(device)
+        for param in model_p.parameters():
+            param.requires_grad = False
+        model_dict = {'omic_sizes': args.omic_sizes, 
+                      'num_classes': args.n_classes, 
+                      'study': args.study,
+                      'model_p': model_p,
+                      'fusion': args.fusion_p,
+                      'pk_path': args.pk_path,
+                      'global_act': args.global_act
+                      }
 
         if args.use_nystrom:
             model = SurvPath_with_Plugin1(**model_dict)
@@ -238,14 +247,7 @@ def _init_model(args,cur):
 
     print('Done!')
     _print_network(args.results_dir, model)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if args.load_model:
-        checkpoint_path = os.path.join(args.checkpoint_path, f"s_{cur}_checkpoint.pt")
-        state_dict = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(state_dict,strict=False)
 
-        # 将模型转换到 GPU（如果可用）
-    model = model.to(device)
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(f"Requires_grad_Layer: {name}")
@@ -345,7 +347,7 @@ def _unpack_data(modality, device, data):
         else:
             mask = data[6].to(device)
 
-        y_disc, event_time, censor, clinical_data_list,slide_id = data[2], data[3], data[4], data[5],data[6]
+        y_disc, event_time, censor, clinical_data_list,slide_id = data[2], data[3], data[4], data[5],data[7]
 
     elif modality in ["coattn", "coattn_motcat"]:
         
@@ -434,6 +436,9 @@ def _process_data_and_forward(model, modality, device, data):
             mask = mask,
             slide_id = slide_id
             )
+
+        
+    
         
     if len(out.shape) == 1:
             out = out.unsqueeze(0)
@@ -533,7 +538,6 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
 
     # one epoch
     for batch_idx, data in tqdm(enumerate(loader), desc="Epoch", total=len(loader), unit="batch"):
-        
         optimizer.zero_grad()
         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, modality, device, data)
         

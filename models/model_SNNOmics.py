@@ -34,6 +34,7 @@ class SNNOmics(nn.Module):
         for i, _ in enumerate(hidden[1:]):
             fc_omic.append(SNN_Block(dim1=hidden[i], dim2=hidden[i+1], dropout=0.25))
         self.fc_omic = nn.Sequential(*fc_omic)
+        self.out_dim_p = hidden[-1]
         self.classifier = nn.Linear(hidden[-1], n_classes)
         init_max_weights(self)
 
@@ -46,6 +47,12 @@ class SNNOmics(nn.Module):
         if return_feats:
             return h_omic, h
         return h
+
+    def forward_p(self,  return_feats=False, **kwargs):
+        x = kwargs['data_omics']
+        h_omic = self.fc_omic(x)
+
+        return h_omic
 
     def relocate(self):
             device=torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -37,11 +37,12 @@ class ABMIL(nn.Module):
         super(ABMIL, self).__init__()
         self.device = device
         self.fusion = fusion
-        self.size_dict_path = {"small": [1024, 256, 256], "big": [1024, 512, 384]}
+        self.size_dict_path = {"small": [768, 256, 256], "big": [1024, 512, 384]}
         self.size_dict_omic = {'small': [256, 256]}
-
+        
         ### Deep Sets Architecture Construction
         size = self.size_dict_path[size_arg]
+        self.out_dim_p = size[2]
         fc = [nn.Linear(size[0], size[1]), nn.ReLU(), nn.Dropout(dropout)]
         attention_net = Attn_Net_Gated(L=size[1], D=size[2], dropout=dropout, n_classes=1)
         fc.append(attention_net)
@@ -145,6 +146,39 @@ class ABMIL(nn.Module):
         
         # return hazards, S, Y_hat, None, None
         return logits
+    
+    def forward_p(self, **kwargs):
+        x_path = kwargs['data_WSI']
+        x_path = x_path.squeeze() #---> need to do this to make it work with this set up
+        A, h_path = self.attention_net(x_path)  
+        A = torch.transpose(A, 1, 0)
+        A_raw = A 
+        A = F.softmax(A, dim=1) 
+        h_path = torch.mm(A, h_path)
+        h_path = self.rho(h_path).squeeze()
+        
+        if self.fusion is not None:
+            
+            x_omic = kwargs['data_omics']
+            x_omic = x_omic.squeeze()
+
+            out = torch.matmul(x_omic, self.fc_1_weight * self.mask_1) + self.fc_1_bias
+            out = self.activation(out)
+            out = torch.matmul(out, self.fc_2_weight * self.mask_2) + self.fc_2_bias 
+
+            #---> apply linear transformation to upscale the dim_per_pathway (from 32 to 256) Lin, GELU, dropout, 
+            h_omic = self.upscale(out)
+
+            if self.fusion == 'bilinear':
+                h = self.mm(h_path.unsqueeze(dim=0), h_omic.unsqueeze(dim=0)).squeeze()
+            elif self.fusion == 'concat':
+                h = self.mm(torch.cat([h_path, h_omic], axis=0))
+        else:
+            h = h_path # [256] vector
+        
+        
+        # return hazards, S, Y_hat, None, None
+        return h
     
     def captum(self, x_omics, x_wsi):
         x_wsi = x_wsi.squeeze() #---> need to do this to make it work with this set up
