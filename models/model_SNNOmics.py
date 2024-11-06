@@ -50,7 +50,7 @@ class SNNOmics(nn.Module):
 
     def forward_p(self,  return_feats=False, **kwargs):
         x = kwargs['data_omics']
-        h_omic = self.fc_omic(x)
+        h_omic = self.fc_omic(x).squeeze(0)
 
         return h_omic
 

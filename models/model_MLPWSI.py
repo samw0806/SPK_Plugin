@@ -18,7 +18,7 @@ def exists(val):
 class MLPWSI(nn.Module):
     def __init__(
         self, 
-        wsi_embedding_dim=1024,
+        wsi_embedding_dim=768,
         input_dim_omics=1577,
         dropout=0.1,
         num_classes=4,

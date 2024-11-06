@@ -1,6 +1,7 @@
 #----> pytorch imports
 import torch
-
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 #----> general imports
 import pandas as pd
 import numpy as np

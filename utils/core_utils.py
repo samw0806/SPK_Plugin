@@ -3,6 +3,7 @@ import numpy as np
 import pdb
 import os
 import ipdb
+import matplotlib.pyplot as plt
 from custom_optims.radam import RAdam
 from models.model_ABMIL import ABMIL
 from models.model_DeepMISL import DeepMISL
@@ -537,7 +538,7 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
     all_clinical_data = []
 
     # one epoch
-    for batch_idx, data in tqdm(enumerate(loader), desc="Epoch", total=len(loader), unit="batch"):
+    for batch_idx, data in enumerate(loader):
         optimizer.zero_grad()
         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, modality, device, data)
         
@@ -778,6 +779,17 @@ def _get_lr_scheduler(args, optimizer, dataloader):
         )
     return lr_scheduler
 
+def _drow_loss(total_losses,args,cur):
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(args.max_epochs), total_losses, marker='o', linestyle='-')
+    plt.title('Total Loss Over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Total Loss')
+    plt.grid()
+    plt.savefig(os.path.join(args.results_dir, "loss_{}_.png".format(cur)))  # 保存为图像文件
+    
+    plt.close()  # 关闭图像以释放内存
+
 def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loader):
     r"""
     Trains the model for the set number of epochs and validates it.
@@ -804,11 +816,12 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
 
     all_survival = _extract_survival_metadata(train_loader, val_loader)
     
-    for epoch in range(args.max_epochs):
-        _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn)
+    total_losses = []
+    for epoch in tqdm(range(args.max_epochs), desc="Epoch Progress", ncols=100):
+        c_index, total_loss = _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn)
         # _, val_cindex, _, _, _, _, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
         # print('Val loss:', total_loss, ', val_c_index:', val_cindex)
-    # save the trained model
+        total_losses.append(total_loss)
     torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
     
     results_dict, val_cindex, val_cindex_ipcw, val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
