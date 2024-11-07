@@ -234,7 +234,8 @@ def _init_model(args,cur):
                       'model_p': model_p,
                       'fusion': args.fusion_p,
                       'pk_path': args.pk_path,
-                      'global_act': args.global_act
+                      'global_act': args.global_act,
+                      "batch_size": args.batch_size
                       }
 
         if args.use_nystrom:
@@ -602,8 +603,8 @@ def _calculate_metrics(loader, dataset_factory, survival_train, all_risk_scores,
     #<---
 
     c_index = concordance_index_censored((1-all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
-    if c_index == 0.5:
-        ipdb.set_trace()
+    # if c_index == 0.5:
+    #     ipdb.set_trace()
     c_index_ipcw, BS, IBS, iauc = 0., 0., 0., 0.
 
     # change the datatype of survival test to calculate metrics 
@@ -822,6 +823,7 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
         # _, val_cindex, _, _, _, _, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
         # print('Val loss:', total_loss, ', val_c_index:', val_cindex)
         total_losses.append(total_loss)
+    _drow_loss(total_losses,args,cur)
     torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
     
     results_dict, val_cindex, val_cindex_ipcw, val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)

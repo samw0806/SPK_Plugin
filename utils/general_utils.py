@@ -5,7 +5,7 @@ import torch.nn as nn
 import pdb
 import os
 import pandas as pd 
-
+import ipdb
 import torch
 import numpy as np
 import torch.nn as nn
@@ -310,13 +310,14 @@ def _collate_omics(batch):
     label = torch.LongTensor([item[2].long() for item in batch])
     event_time = torch.FloatTensor([item[3] for item in batch])
     c = torch.FloatTensor([item[4] for item in batch])
+    slide_id = [item[6] for item in batch]
 
 
     clinical_data_list = []
     for item in batch:
         clinical_data_list.append(item[5])
 
-    return [img, omics, label, event_time, c, clinical_data_list,item[6]]
+    return [img, omics, label, event_time, c, clinical_data_list,slide_id]
 
 
 def _collate_wsi_omics(batch):
@@ -342,14 +343,15 @@ def _collate_wsi_omics(batch):
     label = torch.LongTensor([item[2].long() for item in batch])
     event_time = torch.FloatTensor([item[3] for item in batch])
     c = torch.FloatTensor([item[4] for item in batch])
-
+    slide_id = [item[7] for item in batch]
 
     clinical_data_list = []
     for item in batch:
         clinical_data_list.append(item[5])
 
     mask = torch.stack([item[6] for item in batch], dim=0)
-    return [img, omics, label, event_time, c, clinical_data_list, mask,item[7]]
+    print(slide_id)
+    return [img, omics, label, event_time, c, clinical_data_list, mask,slide_id]
 
 def _collate_MCAT(batch):
     r"""
@@ -392,9 +394,9 @@ def _collate_MCAT(batch):
         clinical_data_list.append(item[10])
 
     mask = torch.stack([item[11] for item in batch], dim=0)
+    slide_id = [item[12] for item in batch]
 
-
-    return [img, omic1, omic2, omic3, omic4, omic5, omic6, label, event_time, c, clinical_data_list, mask,item[12]]
+    return [img, omic1, omic2, omic3, omic4, omic5, omic6, label, event_time, c, clinical_data_list, mask,slide_id]
 
 def _collate_survpath(batch):
     r"""
@@ -429,8 +431,8 @@ def _collate_survpath(batch):
         clinical_data_list.append(item[5])
 
     mask = torch.stack([item[6] for item in batch], dim=0)
-
-    return [img, omic_data_list, label, event_time, c, clinical_data_list, mask,item[7],item[8]]
+    slide_id = [item[8] for item in batch]
+    return [img, omic_data_list, label, event_time, c, clinical_data_list, mask,item[7],slide_id]
 
 def _make_weights_for_balanced_classes_split(dataset):
     r"""

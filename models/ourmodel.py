@@ -8,6 +8,7 @@ from torch_geometric.utils import softmax
 import dgl
 from transformers import AutoTokenizer, AutoModel
 import ipdb
+import numpy as np
 import torch
 import torch.nn as nn
 from torch import nn
@@ -189,15 +190,8 @@ class GATA(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         if global_act is True:
-            # self.cross_attender = MMAttentionLayer(
-            #     dim=in_dim*(patch_count+1),
-            #     dim_head=in_dim*(patch_count+1) // 2,
-            #     heads=2,
-            #     residual=False,
-            #     dropout=0.1,
-            #     num_pathways = 1
-            # )
-            self.cross_attender = CrossAttention(in_dim1=in_dim, in_dim2=in_dim*patch_count, k_dim=64, v_dim=64, num_heads=8)
+
+            self.cross_attender = CrossAttention(in_dim1=in_dim, in_dim2=in_dim, k_dim=64, v_dim=64, num_heads=8)
             self.feed_forward = FeedForward(in_dim, dropout=0.1)
             self.layer_norm = nn.LayerNorm(in_dim)
             self.fc = nn.Sequential(
@@ -257,13 +251,13 @@ class GATA(nn.Module):
             
         
         else:
-            pi_global_vector = pi_total_vector[-1].unsqueeze(0)  # 取出最后一个 (1, 768) 向量
-            pi_remaining_vectors = pi_total_vector[:-1]  
-            pi_remaining_vectors = pi_remaining_vectors.view(1, -1).unsqueeze(0)
-            pi_total_vector = self.cross_attender(pi_global_vector.unsqueeze(0) ,pi_remaining_vectors)
+            pi_global_vector = pi_total_vector[:, -1:, :]  # 选择最后一个时间步的向量
+            # 获取剩下的向量，形状变为 (bs, sq_len-1, emb_dim)
+            pi_remaining_vectors = pi_total_vector[:, :-1, :]  # 获取除了最后一个的所有向量
+            pi_total_vector = self.cross_attender(pi_global_vector ,pi_remaining_vectors).permute(1, 0, 2) 
             pi_total_vector = self.feed_forward(pi_total_vector)
             pi_total_vector = self.layer_norm(pi_total_vector)
-            out = self.fc(pi_total_vector).squeeze(0)
+            out = self.fc(pi_total_vector)
             #---> aggregate 
         return out
         
@@ -336,10 +330,68 @@ class GATA(nn.Module):
     #     return pi_total_vector
 
 
-class PromptEncodeFactory(nn.Module):
-  def __init__(self,in_dim,encoder_model="dmis-lab/biobert-base-cased-v1.2",learnable_n=40,patch_count = 4,):
-    super().__init__()
+# class PromptEncodeFactory(nn.Module):
+#   def __init__(self,in_dim,encoder_model="dmis-lab/biobert-base-cased-v1.2",learnable_n=40,patch_count = 4,):
+#     super().__init__()
     
+#     self.model = AutoModel.from_pretrained(encoder_model)
+#     for param in self.model.encoder.parameters():
+#         param.requires_grad = False  # 冻结 encoder 的参数
+#     self.tokenizer = AutoTokenizer.from_pretrained(encoder_model)
+#     self.embeddings = self.model.embeddings
+#     for param in self.model.parameters():
+#         param.requires_grad = False
+#     for param in self.embeddings.parameters():
+#         param.requires_grad = False
+#     self.learnable_n = learnable_n
+#     self.learnable_prompts = nn.ParameterList(
+#             [nn.Parameter(torch.empty((1, self.learnable_n, in_dim), dtype=torch.float32)) for _ in range(patch_count+1)]
+#         )
+        
+#         # 初始化每个可学习的 prompt 向量
+#     for prompt in self.learnable_prompts:
+#             nn.init.normal_(prompt)
+
+
+#   def forward(self,texts=[]):
+#     prompt_t = self.tokenizer(texts, truncation=True, padding=True,return_tensors="pt")  # 将文本转为张量
+#     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+#     token_type_ids = prompt_t.get('token_type_ids').to(device)  # 可选  
+    
+#     input_ids = prompt_t['input_ids'].to(device)
+
+
+#     embeds = self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
+
+
+
+#     outputs = []  # 初始化一个空列表以存储所有的 output
+
+#     for index, text in enumerate(texts):
+#         learnable_prompt_count = min((embeds[index].shape[0] // 10), self.learnable_n)  # 计算要使用的 learnable prompts 数量
+#         learnable_prompt = self.learnable_prompts[index].to(device)
+#         text_with_learnable_prompt_vector = torch.cat([learnable_prompt, embeds[index].unsqueeze(0)], dim=1)
+#         # text_with_learnable_prompt_vector = torch.cat([embeds[index].unsqueeze(0)], dim=1)
+#         # 构造 attention_mask
+#         attention_mask = torch.ones(text_with_learnable_prompt_vector.size()[:-1]).to(device)
+#         attention_mask[learnable_prompt_count+1:] = 0  # 将未使用的 learnable prompts 的部分设为 0
+        
+#         output = self.model.encoder(text_with_learnable_prompt_vector, attention_mask=attention_mask)
+#         output = output.last_hidden_state
+#         cls_embedding = output[:, 0, :]
+        
+#         outputs.append(cls_embedding)  # 将每个 output 的第一个维度添加到 outputs 列表中
+
+#     outputs = torch.cat(outputs, dim=0)  # 在新的维度上汇总
+#     return outputs
+  
+
+class PromptEncodeFactory(nn.Module):
+  def __init__(self, in_dim, encoder_model="dmis-lab/biobert-base-cased-v1.2", learnable_n=35, patch_count=4,batch_size=1,max_token_len = 411):
+    super().__init__()
+    self.patch_count = patch_count
+    self.max_token_len = max_token_len
+    # 加载预训练的模型
     self.model = AutoModel.from_pretrained(encoder_model)
     for param in self.model.encoder.parameters():
         param.requires_grad = False  # 冻结 encoder 的参数
@@ -349,47 +401,62 @@ class PromptEncodeFactory(nn.Module):
         param.requires_grad = False
     for param in self.embeddings.parameters():
         param.requires_grad = False
+    self.batch_size = batch_size
     self.learnable_n = learnable_n
-    self.learnable_prompts = nn.ParameterList(
-            [nn.Parameter(torch.empty((1, self.learnable_n, in_dim), dtype=torch.float32)) for _ in range(patch_count+1)]
-        )
-        
-        # 初始化每个可学习的 prompt 向量
-    for prompt in self.learnable_prompts:
-            nn.init.normal_(prompt)
+    # 初始化一个矩阵来存储所有 learnable prompts
+    self.learnable_prompts = nn.Parameter(torch.empty(((patch_count + 1)*batch_size,learnable_n, in_dim), dtype=torch.float32))
+    self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 初始化 learnable prompts
+    nn.init.normal_(self.learnable_prompts)
+
+  def pro(self,attn_mask):
+      
+    # 统计每个行向量中1的个数
+    counts = attn_mask.sum(dim=1)  # 形状 (25,)
 
 
-  def forward(self,texts=[]):
-    prompt_t = self.tokenizer(texts, truncation=True, padding=True,return_tensors="pt")  # 将文本转为张量
+    # 计算每个行要设置为1的数量
+    num_ones = torch.clamp(counts // 15, max=self.learnable_n) # 形状 (25,)
+
+    # 创建目标张量 (25, 40)，全零初始化
+    lp_mask = torch.zeros(self.batch_size*(self.patch_count+1), self.learnable_n, dtype=torch.int).to(self.device) 
+
+    # 创建一个范围向量，用于比较每行的num_ones数量
+    range_vector = torch.arange(self.learnable_n).unsqueeze(0).to(self.device)   # 形状 (1, 40)
+
+    # 生成填充结果：每行中前 num_ones[i] 个位置为1
+    lp_mask = (range_vector < num_ones.unsqueeze(1)).int()
+    return lp_mask
+
+  def forward(self, texts=[]):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    token_type_ids = prompt_t.get('token_type_ids').to(device)  # 可选  
-    
+
+    batch_size, num_sentences = len(texts),len(texts[0])
+    flat_texts = texts.flatten().tolist()
+    prompt_t = self.tokenizer(flat_texts, truncation=True, padding=True, return_tensors="pt")  # 将文本转为张量
+    attn_emb_mask = prompt_t.get('attention_mask').to(device)  # 可选
     input_ids = prompt_t['input_ids'].to(device)
 
+    # 获取文本嵌入
+    embeds = self.embeddings(input_ids=input_ids)
+    embeds = embeds[:, :self.max_token_len, :]
+    #(batch_size*num_sen,token_len,emb_dim)
+    # 计算 learnable prompt 数量，确保不超过 max 数量
+    lp_mask = self.pro(attn_emb_mask)
 
-    embeds = self.embeddings(input_ids=input_ids, token_type_ids=token_type_ids)
+    text_with_prompts = torch.cat([embeds,self.learnable_prompts ], dim=1)  # 拼接 prompts 和文本嵌入
 
+    attn_mask = torch.cat([attn_emb_mask,lp_mask],dim=1)
+    # 将整个 batch 一起输入到 encoder 中
+    output = self.model(inputs_embeds=text_with_prompts,
+                                attention_mask=attn_mask)
 
+    output = output.last_hidden_state
+    cls_embedding = output[:, 0, :]  # 取 [CLS] token 对应的嵌入
+    cls_embedding = cls_embedding.view(batch_size, self.patch_count + 1, cls_embedding.shape[-1])
+    #(batch_size*patch_count+1,768)
+    return cls_embedding
 
-    outputs = []  # 初始化一个空列表以存储所有的 output
-
-    for index, text in enumerate(texts):
-        learnable_prompt_count = min((embeds[index].shape[0] // 10), self.learnable_n)  # 计算要使用的 learnable prompts 数量
-        learnable_prompt = self.learnable_prompts[index].to(device)
-        text_with_learnable_prompt_vector = torch.cat([learnable_prompt, embeds[index].unsqueeze(0)], dim=1)
-        # text_with_learnable_prompt_vector = torch.cat([embeds[index].unsqueeze(0)], dim=1)
-        # 构造 attention_mask
-        attention_mask = torch.ones(text_with_learnable_prompt_vector.size()[:-1]).to(device)
-        attention_mask[learnable_prompt_count+1:] = 0  # 将未使用的 learnable prompts 的部分设为 0
-        
-        output = self.model.encoder(text_with_learnable_prompt_vector, attention_mask=attention_mask)
-        output = output.last_hidden_state
-        cls_embedding = output[:, 0, :]
-        
-        outputs.append(cls_embedding)  # 将每个 output 的第一个维度添加到 outputs 列表中
-
-    outputs = torch.cat(outputs, dim=0)  # 在新的维度上汇总
-    return outputs
 
 
 class QLlava(nn.Module):
@@ -489,11 +556,12 @@ class CPKSModel(nn.Module):
                  model_path='wisdomik/Quilt-Llava-v1.5-7b',
                  encoder_model_path="dmis-lab/biobert-v1.1",
                  patch_count=4,
-                 learnable_n=40,
+                 learnable_n=15,
                  in_dim = 768,
                  out_dim = 128,
                  hidden_dim = 1024,
-                 global_act = True
+                 global_act = True,
+                 batch_size = 1
                  ):
         super().__init__()
         #待实现
@@ -502,7 +570,7 @@ class CPKSModel(nn.Module):
         self.qllava = QLlava(model_path)
         for param in self.qllava.parameters():
             param.requires_grad = False
-        self.promptLearner = PromptEncodeFactory(encoder_model=encoder_model_path,learnable_n=learnable_n,in_dim = in_dim,patch_count=patch_count)
+        self.promptLearner = PromptEncodeFactory(encoder_model=encoder_model_path,learnable_n=learnable_n,in_dim = in_dim,patch_count=patch_count,batch_size=batch_size)
         # self.align = AlignBlock()
         self.align = GATA(in_dim,out_dim,hidden_dim, patch_count, global_act,num_heads=1,)
     def crop_image_patches(self,folder_name,slide_id, num_patches):
@@ -548,9 +616,14 @@ class CPKSModel(nn.Module):
                 ans_total.append(ans)  # 将每个ans添加到ans_total
             ans_total = [s.replace('</s>', '').replace('\n', '') for s in ans_total]
         
-        ans_total = [s.replace("'", "").replace("[", "").replace("]","").replace('"',"") for s in data]
+        def clean_string(s):
+            return s.replace("'", "").replace("[", "").replace("]", "").replace('"', "")
+
+        ans_total = np.vectorize(clean_string)(data)
+
+
         pi_total_vector = self.promptLearner(ans_total)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         
         pi_total_vector = self.align(pi_total_vector)
         return pi_total_vector
