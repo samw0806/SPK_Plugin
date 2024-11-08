@@ -151,10 +151,14 @@ class ABMIL(nn.Module):
         x_path = kwargs['data_WSI']
         x_path = x_path.squeeze() #---> need to do this to make it work with this set up
         A, h_path = self.attention_net(x_path)  
-        A = torch.transpose(A, 1, 0)
-        A_raw = A 
-        A = F.softmax(A, dim=1) 
-        h_path = torch.mm(A, h_path)
+        if A.dim() == 2: 
+            A = torch.transpose(A, 1, 0)
+            A = F.softmax(A, dim=1) 
+            h_path = torch.mm(A, h_path)
+        elif A.dim() == 3:  # (a, b, c) -> (a, c, b)
+            A = A.permute(0, 2, 1)
+            A = F.softmax(A, dim=1) 
+            h_path = torch.matmul(A, h_path)
         h_path = self.rho(h_path).squeeze()
         
         if self.fusion is not None:

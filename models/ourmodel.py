@@ -409,17 +409,17 @@ class PromptEncodeFactory(nn.Module):
     # 初始化 learnable prompts
     nn.init.normal_(self.learnable_prompts)
 
-  def pro(self,attn_mask):
+  def pro(self,attn_mask,batch_size):
       
     # 统计每个行向量中1的个数
     counts = attn_mask.sum(dim=1)  # 形状 (25,)
 
 
     # 计算每个行要设置为1的数量
-    num_ones = torch.clamp(counts // 15, max=self.learnable_n) # 形状 (25,)
+    num_ones = torch.clamp(counts // 10, max=self.learnable_n) # 形状 (25,)
 
     # 创建目标张量 (25, 40)，全零初始化
-    lp_mask = torch.zeros(self.batch_size*(self.patch_count+1), self.learnable_n, dtype=torch.int).to(self.device) 
+    lp_mask = torch.zeros(batch_size*(self.patch_count+1), self.learnable_n, dtype=torch.int).to(self.device) 
 
     # 创建一个范围向量，用于比较每行的num_ones数量
     range_vector = torch.arange(self.learnable_n).unsqueeze(0).to(self.device)   # 形状 (1, 40)
@@ -440,11 +440,13 @@ class PromptEncodeFactory(nn.Module):
     # 获取文本嵌入
     embeds = self.embeddings(input_ids=input_ids)
     embeds = embeds[:, :self.max_token_len, :]
+    learnable_prompts = self.learnable_prompts[:batch_size * (self.patch_count + 1), :, :]
     #(batch_size*num_sen,token_len,emb_dim)
     # 计算 learnable prompt 数量，确保不超过 max 数量
-    lp_mask = self.pro(attn_emb_mask)
+    attn_emb_mask = attn_emb_mask[:, :self.max_token_len]
+    lp_mask = self.pro(attn_emb_mask,batch_size)
 
-    text_with_prompts = torch.cat([embeds,self.learnable_prompts ], dim=1)  # 拼接 prompts 和文本嵌入
+    text_with_prompts = torch.cat([embeds,learnable_prompts ], dim=1)  # 拼接 prompts 和文本嵌入
 
     attn_mask = torch.cat([attn_emb_mask,lp_mask],dim=1)
     # 将整个 batch 一起输入到 encoder 中

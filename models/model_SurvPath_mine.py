@@ -113,6 +113,8 @@ class SurvPath_with_Plugin(nn.Module):
             
         elif self.fusion == "concat_linear":
             # 方式3: 拼接后使用线性层
+            if data.dim() == 2:
+                data = data.unsqueeze(0)
             concat = torch.cat((knowledge_emb, data), dim=2)  # 维度 (bs, 64)
             result = self.linear(concat)  # 通过线性层映射回 (bs, 32)
         # embedding = paths_postSA_embed #---> top bloc only
