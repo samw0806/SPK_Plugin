@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from os.path import join
-import pdb
+import ipdb
 
 import numpy as np
 
@@ -80,7 +80,7 @@ class ABMIL(nn.Module):
             if self.fusion == "concat":
                 self.mm = nn.Sequential(*[nn.Linear(256*2, size[2]), nn.ReLU(), nn.Linear(size[2], size[2]), nn.ReLU()])
             elif self.fusion == 'bilinear':
-                self.mm = BilinearFusion(dim1=256, dim2=256, scale_dim1=8, scale_dim2=8, mmhid=256)
+                self.mm = BilinearFusion(dim1=256, dim2=256, scale_dim1=8, scale_dim2=8, mmhid=256,use_bilinear=1)
             else:
                 self.mm = None
             self.activation = nn.ReLU()

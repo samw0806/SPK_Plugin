@@ -1,7 +1,7 @@
 
 from collections import OrderedDict
 from os.path import join
-import pdb
+import ipdb
 
 import numpy as np
 
@@ -67,6 +67,9 @@ class BilinearFusion(nn.Module):
             o2 = self.linear_o2(h2)
 
         ### Fusion
+        if o1.dim() == 3:
+            o1 = o1.squeeze(0)
+            o2 = o2.squeeze(0)
         o1 = torch.cat((o1, torch.cuda.FloatTensor(o1.shape[0], 1).fill_(1)), 1)
         o2 = torch.cat((o2, torch.cuda.FloatTensor(o2.shape[0], 1).fill_(1)), 1)
         o12 = torch.bmm(o1.unsqueeze(2), o2.unsqueeze(1)).flatten(start_dim=1) # BATCH_SIZE X 1024

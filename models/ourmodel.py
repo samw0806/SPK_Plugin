@@ -3,9 +3,9 @@ import torch.nn as nn
 #test
 from PIL import Image
 import torch.nn.functional as F
-from torch_scatter import scatter_add
-from torch_geometric.utils import softmax
-import dgl
+# from torch_scatter import scatter_add
+# from torch_geometric.utils import softmax
+# import dgl
 from transformers import AutoTokenizer, AutoModel
 import ipdb
 import numpy as np
@@ -20,86 +20,37 @@ from PIL import Image
 from models.llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_STRAT_PROMPTS
 from models.layers.cross_attention import FeedForward, MMAttentionLayer
 
-# class fusion_fc(torch.nn.Module):
-#     def __init__(self):
-#         super(fusion_fc, self).__init__()
-#         self.gate_nn = gate_nn
-#         self.nn = nn
+class CrossAttentionFusion(nn.Module):
+    def __init__(self, feature_dim):
+        super(CrossAttentionFusion, self).__init__()
+        self.feature_dim = feature_dim
+        self.query_layer = nn.Linear(feature_dim, feature_dim)
+        self.key_layer = nn.Linear(feature_dim, feature_dim)
+        self.value_layer = nn.Linear(feature_dim, feature_dim)
+        self.fusion_layer = nn.Linear(feature_dim * 2, feature_dim)
 
+    def forward(self, feature1, feature2):
+        """
+        输入：
+        feature1: Tensor of shape (batch_size, seq_len1, feature_dim)
+        feature2: Tensor of shape (batch_size, seq_len2, feature_dim)
+        """
+        query = self.query_layer(feature1)       # (batch_size, seq_len1, feature_dim)
+        key = self.key_layer(feature2)           # (batch_size, seq_len2, feature_dim)
+        value = self.value_layer(feature2)       # (batch_size, seq_len2, feature_dim)
 
+        # 注意力计算
+        attention_scores = torch.matmul(query, key.transpose(-2, -1)) / (self.feature_dim ** 0.5)
+        attention_weights = F.softmax(attention_scores, dim=-1)  # (batch_size, seq_len1, seq_len2)
 
-#     def forward(self, x, batch, size=None):
-#         """"""
-#         x = x.unsqueeze(-1) if x.dim() == 1 else x
-#         #size是说明有几类节点
-#         #此处是就一种，所以是一个全零的张量，代表了每个节点的类型，或是说明每个节点都属于同一张图
-#         #batch = torch.zeros(len(x_img),dtype=torch.long)
-#         size = batch[-1].item() + 1 if size is None else size
-#         assert gate.dim() == x.dim() and gate.size(0) == x.size(0)
-#         #[1,2,1]做这个图专门的softmax，如果第二个参数是[0,1,0]，就会变成[0.5,2,0.5]
-#         gate = softmax(x, batch, num_nodes=size)
-#         #将每个target node的与其邻接节点的边的权重之求和，最终得到的输出维度是节点数目
-#         #scatter_add([1,1,2],[2,0,0])=[3,0,1] --- 第二个向量代表第一个向量里面每个数字需要加到哪个位置上面
-#         #out是所有节点的总特征
-#         out = scatter_add(gate, batch, dim=0, dim_size=size)
-#         '''
-#         print((gate).shape)
-#         print((x).shape)
-#         print((gate * x).shape)
-#         print(out.shape)
-#         torch.Size([237, 1])
-#         torch.Size([237, 512])
-#         torch.Size([237, 512])
-#         torch.Size([1, 512])
-#         237的部分是看他是不是图片,图片大小才回浮动,其他模态都是5或6
-#         '''
-#         return out,gate
+        # 通过注意力权重加权求和值
+        attention_output = torch.matmul(attention_weights, value)  # (batch_size, seq_len1, feature_dim)
 
+        # 特征融合
+        fusion_input = torch.cat([feature1, attention_output], dim=-1)  # (batch_size, seq_len1, feature_dim * 2)
+        fused_feature = self.fusion_layer(fusion_input)  # (batch_size, seq_len1, feature_dim)
 
-# def GNN_relu_Block(dim2, dropout=0.3):
-#     r"""
-#     Multilayer Reception Block w/ Self-Normalization (Linear + ELU + Alpha Dropout)
-#     args:
-#         dim1 (int): Dimension of input features
-#         dim2 (int): Dimension of output features
-#         dropout (float): Dropout rate
-#     """
-#     return nn.Sequential(
-# #             GATConv(in_channels=dim1,out_channels=dim2),
-#             nn.ReLU(),
-#             LayerNorm(dim2),
-#             nn.Dropout(p=dropout))
-
-class CrossAttention(nn.Module):
-    def __init__(self, in_dim1, in_dim2, k_dim, v_dim, num_heads):
-        super(CrossAttention, self).__init__()
-        self.num_heads = num_heads
-        self.k_dim = k_dim
-        self.v_dim = v_dim
-        
-        self.proj_q1 = nn.Linear(in_dim1, k_dim * num_heads, bias=False)
-        self.proj_k2 = nn.Linear(in_dim2, k_dim * num_heads, bias=False)
-        self.proj_v2 = nn.Linear(in_dim2, v_dim * num_heads, bias=False)
-        self.proj_o = nn.Linear(v_dim * num_heads, in_dim1)
-        
-    def forward(self, x1, x2, mask=None):
-        batch_size, seq_len1, in_dim1 = x1.size()
-        seq_len2 = x2.size(1)
-        
-        q1 = self.proj_q1(x1).view(batch_size, seq_len1, self.num_heads, self.k_dim).permute(0, 2, 1, 3)
-        k2 = self.proj_k2(x2).view(batch_size, seq_len2, self.num_heads, self.k_dim).permute(0, 2, 3, 1)
-        v2 = self.proj_v2(x2).view(batch_size, seq_len2, self.num_heads, self.v_dim).permute(0, 2, 1, 3)
-        
-        attn = torch.matmul(q1, k2) / self.k_dim**0.5
-        
-        if mask is not None:
-            attn = attn.masked_fill(mask == 0, -1e9)
-        
-        attn = F.softmax(attn, dim=-1)
-        output = torch.matmul(attn, v2).permute(0, 2, 1, 3).contiguous().view(batch_size, seq_len1, -1)
-        output = self.proj_o(output)
-        
-        return output
+        return fused_feature
 
 
 # 定义GAT神经层
@@ -191,7 +142,7 @@ class GATA(nn.Module):
         self.num_heads = num_heads
         if global_act is True:
 
-            self.cross_attender = CrossAttention(in_dim1=in_dim, in_dim2=in_dim, k_dim=64, v_dim=64, num_heads=8)
+            self.cross_attender = CrossAttentionFusion(in_dim)
             self.feed_forward = FeedForward(in_dim, dropout=0.1)
             self.layer_norm = nn.LayerNorm(in_dim)
             self.fc = nn.Sequential(
@@ -508,49 +459,7 @@ class QLlava(nn.Module):
             return outputs
 
 
-        #把img切割成patch_count个patch
-        #实现patch_count个patch分别加上一个固定的询问prompt进到llava得到每个patch对应一个answar
-        #img_g加上结合clinical的prompt进到llava得到answar_g
-
-
-# class Align(nn.Module):
-#     def __init__(self,dim1,dim2):
-#         super().__init__()
-    
-#     def forward(self,t_emb):
-#         return emb_a
-    
-class AlignBlock(nn.Module):
-    def __init__(self, embed_dim=768, hidden_dim=128):
-        super(AlignBlock, self).__init__()
-        self.layernorm = torch.nn.LayerNorm(768) 
-        self.transformer_encoder = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(
-                d_model=embed_dim,
-                nhead=4,
-                dim_feedforward=1024,  # 前馈神经网络中的隐藏层维度
-                dropout=0.1,
-                activation='relu',
-                batch_first=True
-            )
-        ,num_layers=3
-        ,norm=self.layernorm
-        )
-        self.fc = nn.Linear(embed_dim, hidden_dim)
-        self.activation = nn.ReLU()
-
-    def forward(self, x):
-        # x: shape (5, 768)
-        x_all = x[-1:].unsqueeze(0)  # 提取最后一个向量，形状为 (1, 1, 768)
-        x = x[:-1].unsqueeze(0)  # 提取剩余的 (4, 768)，并调整为 (1, 4, 768)
-
-        x = self.transformer_encoder(x) #(5,768)
-        x = torch.mean(x, dim=1) # (1, 768)，取平均
-        combined = torch.cat((x, x_all.squeeze(0)), dim=0)
-        x = self.fc(combined)  # (1, hidden_dim)(1,256)
-        x = torch.mean(x, dim=1)
-        x = self.activation(x)  # 激活函数
-        return x
+  
 
 #完整模型
 class CPKSModel(nn.Module):
@@ -569,9 +478,9 @@ class CPKSModel(nn.Module):
         #待实现
         self.num_patches = patch_count
 
-        self.qllava = QLlava(model_path)
-        for param in self.qllava.parameters():
-            param.requires_grad = False
+        # self.qllava = QLlava(model_path)
+        # for param in self.qllava.parameters():
+        #     param.requires_grad = False
         self.promptLearner = PromptEncodeFactory(encoder_model=encoder_model_path,learnable_n=learnable_n,in_dim = in_dim,patch_count=patch_count,batch_size=batch_size)
         # self.align = AlignBlock()
         self.align = GATA(in_dim,out_dim,hidden_dim, patch_count, global_act,num_heads=1,)

@@ -510,10 +510,9 @@ def l1_reg_modules(model):
 
     return l1_reg
 
-
-def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, loss_fn):
+def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, loss_fn, accumulation_steps=8):
     r"""
-    Perform one epoch of training 
+    Perform one epoch of training with gradient accumulation.
 
     Args:
         - epoch : Int
@@ -522,13 +521,13 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
         - loader : Pytorch dataloader
         - optimizer : torch.optim
         - loss_fn : custom loss function class 
-    
+        - accumulation_steps : Int, number of batches to accumulate gradients before updating
+
     Returns:
         - c_index : Float
         - total_loss : Float 
-    
     """
-    device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.train()
 
     total_loss = 0.
@@ -540,34 +539,109 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
 
     # one epoch
     for batch_idx, data in enumerate(loader):
-        optimizer.zero_grad()
+        # Only clear gradients every accumulation_steps
+        if batch_idx % accumulation_steps == 0:
+            optimizer.zero_grad(set_to_none=True)
+        
+        # Forward pass and calculate loss
         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, modality, device, data)
+        loss = loss_fn(h=h, y=y_disc, t=event_time, c=censor)
         
-        loss = loss_fn(h=h, y=y_disc, t=event_time, c=censor) 
-        loss_value = loss.item()
-        loss = loss / y_disc.shape[0]
-        risk, _ = _calculate_risk(h)
-        all_risk_scores, all_censorships, all_event_times, all_clinical_data = _update_arrays(all_risk_scores, all_censorships, all_event_times,all_clinical_data, event_time, censor, risk, clinical_data_list)
-        
-        total_loss += loss_value 
-        
+        # Scale loss for accumulation and backpropagate
+        loss = loss / accumulation_steps
         loss.backward()
-        optimizer.step()
-        scheduler.step()
         
-            
-        if (batch_idx % 20) == 0:
-            print("batch: {}, loss: {:.3f}".format(batch_idx, loss.item()))
-    
+        # Store necessary information for C-index calculation
+        loss_value = loss.item() * accumulation_steps
+        risk, _ = _calculate_risk(h)
+        all_risk_scores, all_censorships, all_event_times, all_clinical_data = _update_arrays(
+            all_risk_scores, all_censorships, all_event_times, all_clinical_data, event_time, censor, risk, clinical_data_list
+        )
+        
+        total_loss += loss_value
+
+        # Gradient accumulation step
+        if (batch_idx + 1) % accumulation_steps == 0:
+            optimizer.step()  # Update model parameters
+            scheduler.step()  # Step the scheduler
+
+            # Optionally log
+            if (batch_idx + 1) % (20 * accumulation_steps) == 0:
+                print("batch: {}, loss: {:.3f}".format(batch_idx, loss_value))
+
+    # Normalize total loss over the dataset
     total_loss /= len(loader.dataset)
+    
+    # Calculate C-index
     all_risk_scores = np.concatenate(all_risk_scores, axis=0)
     all_censorships = np.concatenate(all_censorships, axis=0)
     all_event_times = np.concatenate(all_event_times, axis=0)
-    c_index = concordance_index_censored((1-all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
+    c_index = concordance_index_censored((1 - all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
 
     print('Epoch: {}, train_loss: {:.4f}, train_c_index: {:.4f}'.format(epoch, total_loss, c_index))
 
     return c_index, total_loss
+
+
+
+#无梯度累加版本
+# def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, loss_fn,accumulation_steps=6):
+#     r"""
+#     Perform one epoch of training 
+
+#     Args:
+#         - epoch : Int
+#         - model : Pytorch model
+#         - modality : String 
+#         - loader : Pytorch dataloader
+#         - optimizer : torch.optim
+#         - loss_fn : custom loss function class 
+    
+#     Returns:
+#         - c_index : Float
+#         - total_loss : Float 
+    
+#     """
+#     device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#     model.train()
+
+#     total_loss = 0.
+    
+#     all_risk_scores = []
+#     all_censorships = []
+#     all_event_times = []
+#     all_clinical_data = []
+
+#     # one epoch
+#     for batch_idx, data in enumerate(loader):
+#         optimizer.zero_grad(set_to_none=True)
+#         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, modality, device, data)
+        
+#         loss = loss_fn(h=h, y=y_disc, t=event_time, c=censor) 
+#         loss_value = loss.item()
+#         loss = loss / y_disc.shape[0]
+#         risk, _ = _calculate_risk(h)
+#         all_risk_scores, all_censorships, all_event_times, all_clinical_data = _update_arrays(all_risk_scores, all_censorships, all_event_times,all_clinical_data, event_time, censor, risk, clinical_data_list)
+        
+#         total_loss += loss_value 
+        
+#         loss.backward()
+#         optimizer.step()
+#         scheduler.step()
+        
+            
+#         if (batch_idx % 20) == 0:
+#             print("batch: {}, loss: {:.3f}".format(batch_idx, loss.item()))
+    
+#     total_loss /= len(loader.dataset)
+#     all_risk_scores = np.concatenate(all_risk_scores, axis=0)
+#     all_censorships = np.concatenate(all_censorships, axis=0)
+#     all_event_times = np.concatenate(all_event_times, axis=0)
+#     c_index = concordance_index_censored((1-all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
+
+#     print('Epoch: {}, train_loss: {:.4f}, train_c_index: {:.4f}'.format(epoch, total_loss, c_index))
+
+#     return c_index, total_loss
 
 def _calculate_metrics(loader, dataset_factory, survival_train, all_risk_scores, all_censorships, all_event_times, all_risk_by_bin_scores):
     r"""
@@ -824,7 +898,11 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
         # print('Val loss:', total_loss, ', val_c_index:', val_cindex)
         total_losses.append(total_loss)
     _drow_loss(total_losses,args,cur)
-    torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+    filtered_state_dict = {k: v for k, v in model.state_dict().items() if v.requires_grad}
+    print("Saving the following weights:")
+    for name in filtered_state_dict.keys():
+        print(name)
+    torch.save(filtered_state_dict, os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
     
     results_dict, val_cindex, val_cindex_ipcw, val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
     

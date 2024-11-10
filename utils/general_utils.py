@@ -350,7 +350,6 @@ def _collate_wsi_omics(batch):
         clinical_data_list.append(item[5])
 
     mask = torch.stack([item[6] for item in batch], dim=0)
-    print(slide_id)
     return [img, omics, label, event_time, c, clinical_data_list, mask,slide_id]
 
 def _collate_MCAT(batch):
