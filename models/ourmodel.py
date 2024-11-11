@@ -157,48 +157,46 @@ class GATA(nn.Module):
             #     nn.Linear(int(in_dim*(patch_count+1)/4), out_dim),
             # )
         else:
-            edges = [(i, j) for i in range(patch_count+1) for j in range(patch_count+1) if i != j]
-            g = dgl.graph(edges, num_nodes=patch_count+1)
-            g = g.to(self.device)
-            self.layer1 = MultiHeadGATLayer(g, self.in_dim, self.hidden_dim, self.num_heads).to(self.device)
-        # 这里需要注意的是，因为第一层多头注意力机制层layer1选择的是拼接
-        # 那么传入第二层的参数应该是第一层的 输出维度 * 头数
-            self.layer2 = MultiHeadGATLayer(g, self.hidden_dim * self.num_heads, self.in_dim, 1).to(self.device)
-            self.fc = nn.Sequential(
-                nn.Linear(in_dim, int(in_dim/4)),
-                nn.ReLU(),
-                nn.Linear(int(in_dim/4), out_dim)
-            ).to(self.device)
-        
+            self.cross_attender = CrossAttentionFusion(in_dim)
+            self.feed_forward = FeedForward(in_dim, dropout=0.1)
+            self.layer_norm = nn.LayerNorm(in_dim)
 
+        
+    def pca_torch_batch(self,X, k):
+        batch_size, num_features, feature_dim = X.shape
+        X_centered = X - X.mean(dim=2, keepdim=True)  # 对每个样本进行中心化
+
+        # 初始化降维后的张量
+        X_reduced = torch.empty(batch_size, num_features, k, device=X.device)
+
+        for i in range(batch_size):
+            # 计算协方差矩阵
+            cov_matrix = torch.mm(X_centered[i].T, X_centered[i]) / (num_features - 1)
+            
+            # 使用 torch.linalg.eigh 获取特征值和特征向量
+            eig_values, eig_vectors = torch.linalg.eigh(cov_matrix)
+            
+            # 按特征值降序排序
+            sorted_indices = torch.argsort(eig_values, descending=True)
+            principal_components = eig_vectors[:, sorted_indices[:k]]  # 选择前 k 个特征向量
+
+            # 将数据投影到前 k 个主成分上
+            X_reduced[i] = torch.mm(X_centered[i], principal_components)
+        
+        return X_reduced
         
 
     def forward(self,pi_total_vector):
  
 
         if self.global_act is not True:
-            batch = torch.zeros(len(pi_total_vector),dtype=torch.long).to(self.device)
-            pi_total_vector = self.layer1(pi_total_vector)
-            # ELU激活函数
-            pi_total_vector = F.elu(pi_total_vector)
-            pi_total_vector = self.layer2(pi_total_vector)
-            pi_total_vector = pi_total_vector.unsqueeze(-1) if pi_total_vector.dim() == 1 else pi_total_vector
-            #size是说明有几类节点
-            #此处是就一种，所以是一个全零的张量，代表了每个节点的类型，或是说明每个节点都属于同一张图
-            #batch = torch.zeros(len(x_img),dtype=torch.long)
-
-            size = batch[-1].item() + 1
-            
-            # assert gate.dim() == x.dim() and gate.size(0) == x.size(0)
-            #[1,2,1]做这个图专门的softmax，如果第二个参数是[0,1,0]，就会变成[0.5,2,0.5]
-            pi_total_vector = softmax(pi_total_vector, batch, num_nodes=size)
-            #将每个target node的与其邻接节点的边的权重之求和，最终得到的输出维度是节点数目
-            #scatter_add([1,1,2],[2,0,0])=[3,0,1] --- 第二个向量代表第一个向量里面每个数字需要加到哪个位置上面
-            #out是所有节点的总特征
-            #聚合版本(输出(1,out_dim))
-
-            pi_total_vector = self.fc(pi_total_vector)
-            out = scatter_add(pi_total_vector, batch, dim=0, dim_size=size)
+            pi_global_vector = pi_total_vector[:, -1:, :]  # 选择最后一个时间步的向量
+            # 获取剩下的向量，形状变为 (bs, sq_len-1, emb_dim)
+            pi_remaining_vectors = pi_total_vector[:, :-1, :]  # 获取除了最后一个的所有向量
+            pi_total_vector = self.cross_attender(pi_global_vector ,pi_remaining_vectors).permute(1, 0, 2) 
+            pi_total_vector = self.feed_forward(pi_total_vector)
+            pi_total_vector = self.layer_norm(pi_total_vector)
+            out = self.pca_torch_batch(pi_total_vector,self.out_dim)
             
         
         else:
@@ -550,17 +548,19 @@ class CPKSModel1(nn.Module):
                  in_dim = 768,
                  out_dim = 128,
                  hidden_dim = 1024,
+                 global_act = True,
+                 batch_size = 1
                  ):
         super().__init__()
         #待实现
         self.num_patches = patch_count
 
-        self.qllava = QLlava(model_path)
-        for param in self.qllava.parameters():
-            param.requires_grad = False
-        self.promptLearner = PromptEncodeFactory(encoder_model=encoder_model_path,learnable_n=learnable_n)
+        # self.qllava = QLlava(model_path)
+        # for param in self.qllava.parameters():
+        #     param.requires_grad = False
+        self.promptLearner = PromptEncodeFactory1(encoder_model=encoder_model_path,learnable_n=learnable_n,in_dim = in_dim,patch_count=patch_count,batch_size=batch_size)
         # self.align = AlignBlock()
-        self.align = GATA(in_dim,out_dim,hidden_dim,  num_heads=1)
+        self.align = GATA(in_dim,out_dim,hidden_dim, patch_count, global_act,num_heads=1,)
     def crop_image_patches(self,folder_name,slide_id, num_patches):
         # 检查 num_patches 是否为正偶数
         if not isinstance(num_patches, int) or num_patches <= 0 or num_patches % 2 != 0:
@@ -604,12 +604,60 @@ class CPKSModel1(nn.Module):
                 ans_total.append(ans)  # 将每个ans添加到ans_total
             ans_total = [s.replace('</s>', '').replace('\n', '') for s in ans_total]
         
-        ans_total = [s.replace("'", "").replace("[", "").replace("]","").replace('"',"") for s in data]
+        def clean_string(s):
+            return s.replace("'", "").replace("[", "").replace("]", "").replace('"', "")
+
+        ans_total = np.vectorize(clean_string)(data)
+
+
         pi_total_vector = self.promptLearner(ans_total)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        batch = torch.zeros(len(pi_total_vector),dtype=torch.long).to(device)
-        pi_total_vector = self.align(pi_total_vector,batch)
+
+        
+        pi_total_vector = self.align(pi_total_vector)
         return pi_total_vector
+
+class PromptEncodeFactory1(nn.Module):
+  def __init__(self, in_dim, encoder_model="dmis-lab/biobert-base-cased-v1.2", learnable_n=35, patch_count=4,batch_size=1,max_token_len = 411):
+    super().__init__()
+    self.patch_count = patch_count
+    self.max_token_len = max_token_len
+    # 加载预训练的模型
+    self.model = AutoModel.from_pretrained(encoder_model)
+    for param in self.model.encoder.parameters():
+        param.requires_grad = False  # 冻结 encoder 的参数
+    self.tokenizer = AutoTokenizer.from_pretrained(encoder_model)
+    self.embeddings = self.model.embeddings
+    for param in self.model.parameters():
+        param.requires_grad = False
+    for param in self.embeddings.parameters():
+        param.requires_grad = False
+    self.batch_size = batch_size
+    self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 初始化 learnable prompts
+
+
+  def forward(self, texts=[]):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    batch_size, num_sentences = len(texts),len(texts[0])
+    flat_texts = texts.flatten().tolist()
+    prompt_t = self.tokenizer(flat_texts, truncation=True, padding=True, return_tensors="pt")  # 将文本转为张量
+    attn_emb_mask = prompt_t.get('attention_mask').to(device)
+    input_ids = prompt_t['input_ids'].to(device)
+
+    # 获取文本嵌入
+    embeds = self.embeddings(input_ids=input_ids)
+
+
+    # 将整个 batch 一起输入到 encoder 中
+    output = self.model(inputs_embeds=embeds,
+                                attention_mask=attn_emb_mask)
+
+    output = output.last_hidden_state
+    cls_embedding = output[:, 0, :]  # 取 [CLS] token 对应的嵌入
+    cls_embedding = cls_embedding.view(batch_size, self.patch_count + 1, cls_embedding.shape[-1])
+    #(batch_size*patch_count+1,768)
+    return cls_embedding
+
 
 
     

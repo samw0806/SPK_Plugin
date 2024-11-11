@@ -217,9 +217,10 @@ def _init_model(args,cur):
             model = SurvPath_with_nystrom(**model_dict)
         else:
             model = SurvPath(**model_dict)
-    
+    else:
+        raise NotImplementedError
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if args.load_model:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         checkpoint_path = os.path.join(args.checkpoint_path, f"s_{cur}_checkpoint.pt")
         state_dict = torch.load(checkpoint_path, map_location=device)
         model.load_state_dict(state_dict,strict=False)
@@ -242,17 +243,17 @@ def _init_model(args,cur):
             model = SurvPath_with_Plugin1(**model_dict)
         else:
             model = SurvPath_with_Plugin(**model_dict)
-
     else:
-        raise NotImplementedError
+        model = model.to(device)
+
 
 
     print('Done!')
     _print_network(args.results_dir, model)
 
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(f"Requires_grad_Layer: {name}")
+    # for name, param in model.named_parameters():
+    #     if param.requires_grad:
+    #         print(f"Requires_grad_Layer: {name}")
 
     return model
 

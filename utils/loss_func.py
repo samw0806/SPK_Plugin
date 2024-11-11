@@ -65,10 +65,10 @@ def nll_loss(h, y, c, alpha=0.0, eps=1e-7, reduction='sum'):
     Zadeh, S.G. and Schmid, M., 2020. Bias in cross-entropy-based training of deep survival networks. IEEE transactions on pattern analysis and machine intelligence.
     """
     # print("h shape", h.shape)
-
+    
     # make sure these are ints
-    y = y.type(torch.int64)
-    c = c.type(torch.int64)
+    y = y.type(torch.int64).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    c = c.type(torch.int64).to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
     hazards = torch.sigmoid(h)
     # print("hazards shape", hazards.shape)
 

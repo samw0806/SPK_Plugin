@@ -416,7 +416,6 @@ def _collate_survpath(batch):
     """
     
     img = torch.stack([item[0] for item in batch])
-
     omic_data_list = []
     for item in batch:
         omic_data_list.append(item[1])
@@ -428,10 +427,10 @@ def _collate_survpath(batch):
     clinical_data_list = []
     for item in batch:
         clinical_data_list.append(item[5])
-
     mask = torch.stack([item[6] for item in batch], dim=0)
-    slide_id = [item[8] for item in batch]
-    return [img, omic_data_list, label, event_time, c, clinical_data_list, mask,item[7],slide_id]
+    slide_id = [item[7] for item in batch]
+
+    return [img, omic_data_list, label, event_time, c, clinical_data_list, mask,slide_id]
 
 def _make_weights_for_balanced_classes_split(dataset):
     r"""
@@ -500,7 +499,6 @@ def _get_split_loader(args, split_dataset, training = False, testing = False, we
          collate_fn = _collate_survpath 
     else:
         raise NotImplementedError
-
     if not testing:
         if training:
             if weighted:

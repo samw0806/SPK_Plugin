@@ -68,8 +68,8 @@ class SurvPath_with_Plugin(nn.Module):
         self.cpks_plugin = CPKSModel(out_dim=model_p.out_dim_p,global_act = global_act,batch_size = batch_size)
         self.num_pathways = len(omic_sizes)
 
-        if fusion == "concat_linear":
-            self.linear = nn.Sequential(*[nn.Linear(model_p.out_dim_p*2, model_p.out_dim_p*4), nn.ReLU(), nn.Linear(model_p.out_dim_p*4, model_p.out_dim_p), nn.ReLU()])
+
+        self.linear = nn.Sequential(*[nn.Linear(model_p.out_dim_p*2, model_p.out_dim_p*4), nn.ReLU(), nn.Linear(model_p.out_dim_p*4, model_p.out_dim_p), nn.ReLU()])
 
         self.logits = nn.Sequential(
                 nn.Linear(model_p.out_dim_p, int(model_p.out_dim_p/4)),
@@ -103,20 +103,11 @@ class SurvPath_with_Plugin(nn.Module):
 
         cpks_inputs = ans_values
         knowledge_emb = self.cpks_plugin(cpks_inputs)
-        if self.fusion == "add":
-            # 方式1: 元素级相加
-            result = knowledge_emb + data
-
-        elif self.fusion == "multiply":
-            # 方式2: 元素级相乘
-            result = knowledge_emb * data
-            
-        elif self.fusion == "concat_linear":
             # 方式3: 拼接后使用线性层
-            if data.dim() == 2:
+        if data.dim() == 2:
                 data = data.unsqueeze(0)
-            concat = torch.cat((knowledge_emb, data), dim=2)  # 维度 (bs, 64)
-            result = self.linear(concat)  # 通过线性层映射回 (bs, 32)
+        concat = torch.cat((knowledge_emb, data), dim=2)  # 维度 (bs, 64)
+        result = self.linear(concat)  # 通过线性层映射回 (bs, 32)
         # embedding = paths_postSA_embed #---> top bloc only
         # embedding = wsi_postSA_embed #---> bottom bloc only
 
@@ -126,6 +117,8 @@ class SurvPath_with_Plugin(nn.Module):
 
         return logits
     
+
+
 class SurvPath_with_Plugin1(nn.Module):
     def __init__(self,
                 omic_sizes=[100, 200, 300, 400, 500, 600],
@@ -134,45 +127,73 @@ class SurvPath_with_Plugin1(nn.Module):
                 num_classes=4,
                 wsi_projection_dim=256,
                 omic_names = [],
+                study = 'stad',
+                model_p= None,
+                fusion= '',
+                pk_path= '',
+                global_act = True,  
+                batch_size = 1    
                  ):
         super(SurvPath_with_Plugin, self).__init__()
         #下面这部分只影响到SurvPath原本的部分
-        self.survpath = SurvPath(omic_sizes,
-            wsi_embedding_dim,
-            dropout,
-            num_classes,
-            wsi_projection_dim,
-            omic_names)
-        for param in self.survpath.parameters():
+        self.study = study
+        self.model_p = model_p
+        self.pk_path = pk_path
+        self.model_p = model_p
+        self.fusion = fusion
+        for param in self.model_p.parameters():
             param.requires_grad = False
-        self.cpks_plugin = CPKSModel1()
+        self.cpks_plugin = CPKSModel1(out_dim=model_p.out_dim_p,global_act = global_act,batch_size = batch_size)
+        self.num_pathways = len(omic_sizes)
+
+
+        self.linear = nn.Sequential(*[nn.Linear(model_p.out_dim_p*2, model_p.out_dim_p*4), nn.ReLU(), nn.Linear(model_p.out_dim_p*4, model_p.out_dim_p), nn.ReLU()])
+
         self.logits = nn.Sequential(
-                nn.Linear(128*3, int(128*3/4)),
+                nn.Linear(model_p.out_dim_p, int(model_p.out_dim_p/4)),
                 nn.ReLU(),
-                nn.Linear(int(128*3/4), num_classes)
+                nn.Linear(int(model_p.out_dim_p/4), num_classes)
             )
 
+    
     def forward(self, **kwargs):
-        paths_postSA_embed,wsi_postSA_embed = self.survpath.forward_cut(**kwargs)
-        knowledge_df = pd.read_csv('/home/ubuntu/disk1/wys/SurvPath/datasets_csv/prior_knowledge/stad/knowledge_p4.csv')
-        
         #process plugin
-        slide_id_jpg = kwargs['slide_id'].replace(".svs",".jpg")
-        matching_row = knowledge_df[knowledge_df['Label'] == slide_id_jpg]
-        ans_values = matching_row[['Ans_1', 'Ans_2', 'Ans_3', 'Ans_4', 'Ans_5']].values.flatten()
+        self.cuda()
+
+        
+        #---> project omics data to projection_dim/2
+        data = self.model_p.forward_p(**kwargs).unsqueeze(0) #[B, n]
+
+        knowledge_df = pd.read_csv(self.pk_path)
+        #process plugin
+        # 将 slide_id 转换为 JPG 格式
+        slide_ids_jpg = [slide_id.replace(".svs", ".jpg") for slide_id in kwargs['slide_id']]
+
+        # 从 DataFrame 中筛选出所有符合条件的行
+        matching_rows = knowledge_df[knowledge_df['Label'].isin(slide_ids_jpg)]
+
+        # 按照 slide_ids_jpg 的顺序排列行
+        matching_rows = matching_rows.set_index('Label').loc[slide_ids_jpg]
+
+        # 提取 Ans_1 到 Ans_5 列的值并转换为 numpy 数组
+        ans_values = matching_rows[['Ans_1', 'Ans_2', 'Ans_3', 'Ans_4', 'Ans_5']].values
+
 
         cpks_inputs = ans_values
         knowledge_emb = self.cpks_plugin(cpks_inputs)
-        embedding = torch.cat([paths_postSA_embed, wsi_postSA_embed,knowledge_emb], dim=1) #---> both branches
+            # 方式3: 拼接后使用线性层
+        if data.dim() == 2:
+                data = data.unsqueeze(0)
+        concat = torch.cat((knowledge_emb, data), dim=2)  # 维度 (bs, 64)
+        result = self.linear(concat)  # 通过线性层映射回 (bs, 32)
         # embedding = paths_postSA_embed #---> top bloc only
         # embedding = wsi_postSA_embed #---> bottom bloc only
 
         # embedding = torch.mean(mm_embed, dim=1)
         #---> get logits
-        logits = self.logits(embedding)
+        logits = self.logits(result).squeeze(0)
 
         return logits
-
 
 
 

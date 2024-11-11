@@ -2,7 +2,7 @@
 import torch
 import numpy as np 
 # from x_transformers import CrossAttender
-
+import ipdb
 import torch
 import torch.nn as nn
 from torch import nn
@@ -93,7 +93,7 @@ class SurvPath(nn.Module):
         self.num_classes = num_classes
         self.feed_forward = FeedForward(self.wsi_projection_dim // 2, dropout=dropout)
         self.layer_norm = nn.LayerNorm(self.wsi_projection_dim // 2)
-
+        self.out_dim_p = self.wsi_projection_dim
         # when both top and bottom blocks 
         self.to_logits = nn.Sequential(
                 nn.Linear(self.wsi_projection_dim, int(self.wsi_projection_dim/4)),
@@ -101,9 +101,6 @@ class SurvPath(nn.Module):
                 nn.Linear(int(self.wsi_projection_dim/4), self.num_classes)
             )
             # 冻结除 self.to_logits 和 self.cpks_plugin 以外的所有参数
-        for name, param in self.named_parameters():
-            if "to_logits" not in name and "cpks_plugin" not in name:
-                param.requires_grad = False
         
     def init_per_path_model(self, omic_sizes):
         hidden = [256, 256]
@@ -116,19 +113,11 @@ class SurvPath(nn.Module):
         self.sig_networks = nn.ModuleList(sig_networks)    
     
     def forward(self, **kwargs):
+
         wsi = kwargs['x_path']
         x_omic = [kwargs['x_omic%d' % i] for i in range(1,self.num_pathways+1)]
         mask = None
         return_attn = kwargs["return_attn"]
-        slide_id_jpg = kwargs['slide_id'].replace("svs","jpg")
-        clinical_info = kwargs['clinical_data'][0]
-        clinical_prompt = f"The patient is at stage {clinical_info[0]}, grade {clinical_info[1]}, and has a cancer type of {clinical_info[2]}."
-        cpks_inputs = (slide_id_jpg,clinical_prompt)
-        start_time = time.time()
-        knowledge_emb = self.cpks_plugin(cpks_inputs)
-        end_time = time.time()
-        execution_time = end_time - start_time
-        print(f"Execution time: {execution_time:.4f} seconds")
         #---> get pathway embeddings 
         h_omic = [self.sig_networks[idx].forward(sig_feat.float()) for idx, sig_feat in enumerate(x_omic)] ### each omic signature goes through it's own FC layer
         h_omic_bag = torch.stack(h_omic).unsqueeze(0) ### omic embeddings are stacked (to be used in co-attention)
@@ -157,18 +146,19 @@ class SurvPath(nn.Module):
         wsi_postSA_embed = torch.mean(wsi_postSA_embed, dim=1)
 
         # when both top and bottom block
-        embedding = torch.cat([paths_postSA_embed, wsi_postSA_embed,knowledge_emb], dim=1) #---> both branches
+        embedding = torch.cat([paths_postSA_embed, wsi_postSA_embed], dim=1) #---> both branches
         # embedding = paths_postSA_embed #---> top bloc only
         # embedding = wsi_postSA_embed #---> bottom bloc only
 
         # embedding = torch.mean(mm_embed, dim=1)
         #---> get logits
         logits = self.to_logits(embedding)
+
         if return_attn:
             return logits, attn_pathways, cross_attn_pathways, cross_attn_histology
         else:
             return logits
-    def forward_cut(self, **kwargs):
+    def forward_p(self, **kwargs):
         wsi = kwargs['x_path']
         x_omic = [kwargs['x_omic%d' % i] for i in range(1,self.num_pathways+1)]
         mask = None
@@ -202,7 +192,7 @@ class SurvPath(nn.Module):
         return paths_postSA_embed, wsi_postSA_embed
         # when both top and bottom block
 
-    def forward_mid_fusion(self, **kwargs):
+    def forward_early_fusion(self, **kwargs):
         wsi = kwargs['x_path']
         x_omic = [kwargs['x_omic%d' % i] for i in range(1,self.num_pathways+1)]
         mask = None
